@@ -1,13 +1,10 @@
-local ADDON_NAME = ...
-
-local Probe = {}
+local ADDON_NAME, Probe = ...
 _G.MarketPilotProbe = Probe
 
 local frame = CreateFrame("Frame")
-local db
 local ahOpen = false
-local lastItemID
-local registeredEvents = {}
+local pending
+local log, text, describe = Probe.Log, Probe.Text, Probe.Describe
 
 local CANDIDATE_EVENTS = {
     "PLAYER_LOGIN",
@@ -17,6 +14,10 @@ local CANDIDATE_EVENTS = {
     "ITEM_SEARCH_RESULTS_UPDATED",
     "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
     "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED",
+    "AUCTION_HOUSE_THROTTLED_MESSAGE_SENT",
+    "AUCTION_HOUSE_THROTTLED_MESSAGE_QUEUED",
+    "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
+    "AUCTION_HOUSE_THROTTLED_SPECIFIC_SEARCH_READY",
 }
 
 local CANDIDATE_FUNCTIONS = {
@@ -29,365 +30,252 @@ local CANDIDATE_FUNCTIONS = {
     "IsThrottledMessageSystemReady",
 }
 
-local function now()
-    if type(time) == "function" then
-        return time()
-    end
-    return 0
-end
-
-local function appendLog(message)
-    local line = tostring(message)
-    print("|cff66ccffMarketPilotProbe:|r " .. line)
-
-    if not db then
-        return
-    end
-
-    db.logs = db.logs or {}
-    db.logs[#db.logs + 1] = {
-        t = now(),
-        message = line,
-    }
-
-    while #db.logs > 200 do
-        table.remove(db.logs, 1)
-    end
-end
-
-local function describeTable(value)
-    if type(value) ~= "table" then
-        return tostring(value)
-    end
-
-    local parts = {}
-    local count = 0
-
-    for key, fieldValue in pairs(value) do
-        local fieldType = type(fieldValue)
-        if fieldType == "string" or fieldType == "number" or fieldType == "boolean" or fieldValue == nil then
-            count = count + 1
-            parts[#parts + 1] = tostring(key) .. "=" .. tostring(fieldValue)
-            if count >= 20 then
-                parts[#parts + 1] = "..."
-                break
-            end
-        end
-    end
-
-    return "{" .. table.concat(parts, ", ") .. "}"
-end
-
-local function getBuildSnapshot()
-    local version, build, buildDate, interface = GetBuildInfo()
-    return {
-        version = version,
-        build = build,
-        buildDate = buildDate,
-        interface = interface,
-        capturedAt = now(),
-    }
-end
-
-local function saveBuildSnapshot()
-    if not db then
-        return
-    end
-    db.build = getBuildSnapshot()
-end
-
-local function safeRegisterEvent(eventName)
-    local ok, err = pcall(frame.RegisterEvent, frame, eventName)
-    registeredEvents[eventName] = ok and true or false
-    if not ok then
-        appendLog("event unavailable: " .. eventName .. " -> " .. tostring(err))
-    end
-end
-
-local function functionExists(name)
-    return type(C_AuctionHouse) == "table" and type(C_AuctionHouse[name]) == "function"
-end
-
-local function printStatus()
-    saveBuildSnapshot()
-    local build = db and db.build or getBuildSnapshot()
-
-    appendLog("client version=" .. tostring(build.version)
-        .. " build=" .. tostring(build.build)
-        .. " date=" .. tostring(build.buildDate)
-        .. " interface=" .. tostring(build.interface))
-
-    appendLog("C_AuctionHouse=" .. tostring(type(C_AuctionHouse) == "table") .. " AH-open=" .. tostring(ahOpen))
-
+local function recordSurface()
     for _, name in ipairs(CANDIDATE_FUNCTIONS) do
-        appendLog("API " .. name .. "=" .. tostring(functionExists(name)))
-    end
-
-    for _, eventName in ipairs(CANDIDATE_EVENTS) do
-        appendLog("event registered " .. eventName .. "=" .. tostring(registeredEvents[eventName] == true))
-    end
-
-    if functionExists("IsThrottledMessageSystemReady") then
-        local ok, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
-        appendLog("throttle ready call ok=" .. tostring(ok) .. " value=" .. tostring(ready))
+        Probe.session.functions[name] = Probe.Exists(name)
     end
 end
 
-local function readCommodityResults(itemID)
-    if not functionExists("GetNumCommoditySearchResults") or not functionExists("GetCommoditySearchResultInfo") then
-        appendLog("commodity result API incomplete")
-        return
-    end
-
-    local okCount, count = pcall(C_AuctionHouse.GetNumCommoditySearchResults, itemID)
-    if not okCount then
-        appendLog("GetNumCommoditySearchResults failed: " .. tostring(count))
-        return
-    end
-
-    count = tonumber(count) or 0
-    appendLog("commodity results itemID=" .. tostring(itemID) .. " rows=" .. tostring(count))
-
-    local samples = {}
-    local maxRows = math.min(count, 5)
-    for index = 1, maxRows do
-        local okInfo, info = pcall(C_AuctionHouse.GetCommoditySearchResultInfo, itemID, index)
-        if okInfo then
-            local description = describeTable(info)
-            samples[#samples + 1] = description
-            appendLog("commodity[" .. index .. "] " .. description)
-        else
-            appendLog("commodity[" .. index .. "] failed: " .. tostring(info))
+local function registerEvents()
+    for _, event in ipairs(CANDIDATE_EVENTS) do
+        local ok, result = pcall(frame.RegisterEvent, frame, event)
+        local registered = "UNKNOWN"
+        if not ok or result == false then
+            registered = false
+        elseif type(frame.IsEventRegistered) == "function" then
+            local checked, value = pcall(frame.IsEventRegistered, frame, event)
+            if checked and type(value) == "boolean" then registered = value end
         end
-    end
-
-    if db then
-        db.lastResult = {
-            kind = "commodity",
-            itemID = itemID,
-            rowCount = count,
-            samples = samples,
-            capturedAt = now(),
-        }
+        Probe.session.events[event] = { registered = registered, fired = 0 }
+        log("event " .. event .. " registerCallOK=" .. text(ok)
+            .. " registered=" .. text(registered) .. " return=" .. text(result))
     end
 end
 
-local function makeItemKey(itemID)
-    if not functionExists("MakeItemKey") then
-        return false, "MakeItemKey unavailable"
+local function printSession(session, label)
+    log(label .. " build " .. describe(session.build))
+    for _, name in ipairs(CANDIDATE_FUNCTIONS) do
+        log(label .. " API " .. name .. "=" .. text(session.functions[name]))
     end
-
-    local ok, itemKey = pcall(C_AuctionHouse.MakeItemKey, itemID)
-    if not ok then
-        return false, itemKey
+    for _, event in ipairs(CANDIDATE_EVENTS) do
+        log(label .. " event " .. event .. " " .. describe(session.events[event]))
     end
-
-    return true, itemKey
+    log(label .. " throttle " .. describe(session.throttle))
 end
 
-local function readItemResults(itemID, eventItemKey)
-    if not functionExists("GetNumItemSearchResults") or not functionExists("GetItemSearchResultInfo") then
-        appendLog("item result API incomplete")
+local function status()
+    recordSurface()
+    Probe.Ready("status")
+    log("AH-open=" .. text(ahOpen) .. " pendingItemID=" .. text(pending and pending.itemID))
+    printSession(Probe.session, "current")
+    log("API signatures/price/quantity semantics=UNKNOWN until beta client evidence is reviewed")
+end
+
+local function finishFailure(reason)
+    log(reason .. "; last successful observation preserved")
+    if pending then pending.status = "FAILED" end
+    pending = nil
+end
+
+-- Existing probe signatures are explicit candidates, not confirmed Forever APIs.
+-- Never retry a failure with a different signature or synthesize an item key.
+local function readResults(kind, key, event)
+    local query = pending
+    local countName = kind == "commodity" and "GetNumCommoditySearchResults" or "GetNumItemSearchResults"
+    local rowName = kind == "commodity" and "GetCommoditySearchResultInfo" or "GetItemSearchResultInfo"
+    log("candidate " .. countName .. "(" .. describe(key) .. ")")
+    local ok, count = Probe.Call(countName, key)
+    if not ok or not Probe.IsCount(count) then
+        finishFailure("result count=UNKNOWN; raw=" .. text(count))
         return
     end
-
-    local itemKey = eventItemKey
-    if type(itemKey) ~= "table" then
-        local okKey, keyOrError = makeItemKey(itemID)
-        if not okKey then
-            appendLog("cannot build item key for item result: " .. tostring(keyOrError))
+    log("result path=" .. kind .. " itemID=" .. query.itemID .. " rows=" .. count)
+    local samples = {}
+    for index = 1, math.min(count, 5) do
+        log("candidate " .. rowName .. "(key, " .. index .. ")")
+        local rowOK, row = Probe.Call(rowName, key, index)
+        if not rowOK or type(row) ~= "table" then
+            finishFailure("row[" .. index .. "]=UNKNOWN; raw=" .. text(row))
             return
         end
-        itemKey = keyOrError
+        local description = describe(row)
+        samples[#samples + 1] = description
+        log(kind .. "[" .. index .. "] " .. description)
+        log("fields quantity=" .. text(rawget(row, "quantity"))
+            .. " unitPrice=" .. text(rawget(row, "unitPrice"))
+            .. " auctionID=" .. text(rawget(row, "auctionID")) .. "; semantics=UNKNOWN")
     end
+    Probe.Ready("result")
+    query.status = "OBSERVED"
+    Probe.db.lastSuccess = {
+        kind = kind, itemID = query.itemID, rowCount = count,
+        samples = samples, capturedAt = Probe.Now(), event = event,
+        query = Probe.Copy(query), evidence = Probe.Copy(Probe.session),
+    }
+    pending = nil
+    log("saved successful result observation (up to 5 rows); completeness/semantics=UNKNOWN")
+end
 
-    local okCount, count = pcall(C_AuctionHouse.GetNumItemSearchResults, itemKey)
-    if not okCount then
-        appendLog("GetNumItemSearchResults failed: " .. tostring(count))
+local function matchingResult(event, value)
+    if not pending then
+        log("result ignored: no pending probe query")
         return
     end
-
-    count = tonumber(count) or 0
-    appendLog("item results itemID=" .. tostring(itemID) .. " rows=" .. tostring(count))
-
-    local samples = {}
-    local maxRows = math.min(count, 5)
-    for index = 1, maxRows do
-        local okInfo, info = pcall(C_AuctionHouse.GetItemSearchResultInfo, itemKey, index)
-        if okInfo then
-            local description = describeTable(info)
-            samples[#samples + 1] = description
-            appendLog("item[" .. index .. "] " .. description)
-        else
-            appendLog("item[" .. index .. "] failed: " .. tostring(info))
+    if event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
+        if type(value) ~= "number" or value ~= pending.itemID then
+            log("result ignored: itemID missing/mismatched; correlation=UNKNOWN")
+            return
         end
-    end
-
-    if db then
-        db.lastResult = {
-            kind = "item",
-            itemID = itemID,
-            rowCount = count,
-            samples = samples,
-            capturedAt = now(),
-        }
+        readResults("commodity", value, event)
+    else
+        if type(value) ~= "table" or rawget(value, "itemID") ~= pending.itemID then
+            log("result ignored: item key missing/mismatched; correlation=UNKNOWN")
+            return
+        end
+        -- Check every field supplied by MakeItemKey, including variant fields.
+        for key, field in next, pending.itemKey do
+            if rawget(value, key) ~= field then
+                log("result ignored: item key differs; correlation=UNKNOWN")
+                return
+            end
+        end
+        readResults("item", value, event)
     end
 end
 
-local function queryItem(itemID)
-    itemID = tonumber(itemID)
-    if not itemID or itemID <= 0 then
-        appendLog("usage: /mpprobe scan <itemID>")
+local function queryItem(argument)
+    local itemID = tonumber(argument)
+    if not argument:match("^%d+$") or not Probe.IsCount(itemID) or itemID == 0 then
+        log("usage: /mpprobe scan <positive integer itemID>")
         return
     end
-
-    if not ahOpen then
-        appendLog("open the Auction House before scanning")
+    if not ahOpen then log("open the Auction House before scanning"); return end
+    if pending then log("query still pending; wait or close/reopen AH to cancel"); return end
+    if not Probe.Exists("SendSearchQuery") then log("SendSearchQuery unavailable; signature=UNKNOWN"); return end
+    local ready = Probe.Ready("before query")
+    if ready == false then log("not ready; no query sent. Retry manually after a ready event"); return end
+    log("candidate MakeItemKey(itemID); Forever signature=UNKNOWN")
+    local okKey, itemKey = Probe.Call("MakeItemKey", itemID)
+    if not okKey or type(itemKey) ~= "table" or rawget(itemKey, "itemID") ~= itemID then
+        log("MakeItemKey returned unusable key: " .. describe(itemKey) .. "; query not sent")
         return
     end
-
-    if not functionExists("SendSearchQuery") then
-        appendLog("SendSearchQuery unavailable")
+    -- Keep correlation keys primitive and detached from mutable API-owned data.
+    local savedKey = {}
+    for key, value in next, itemKey do
+        local kind = type(value)
+        if (type(key) ~= "string" and type(key) ~= "number")
+            or (kind ~= "string" and kind ~= "number" and kind ~= "boolean") then
+            log("item key contains non-primitive fields; signature=UNKNOWN; query not sent")
+            return
+        end
+        savedKey[key] = value
+    end
+    recordSurface()
+    local query = { itemID = itemID, itemKey = savedKey, attemptedAt = Probe.Now(), status = "PENDING" }
+    pending = query
+    Probe.db.lastQuery = query
+    log("candidate SendSearchQuery(itemKey, {}, true) key=" .. describe(itemKey) .. "; Forever signature=UNKNOWN")
+    local ok, result = Probe.Call("SendSearchQuery", itemKey, {}, true)
+    log("SendSearchQuery callOK=" .. text(ok) .. " return=" .. describe(result) .. "; server acceptance=UNKNOWN until result event")
+    if not ok or result == false then
+        finishFailure("query failed/rejected")
         return
     end
-
-    local okKey, itemKey = makeItemKey(itemID)
-    if not okKey then
-        appendLog("MakeItemKey failed: " .. tostring(itemKey))
-        return
-    end
-
-    lastItemID = itemID
-    if db then
-        db.lastQuery = {
-            itemID = itemID,
-            attemptedAt = now(),
-        }
-    end
-
-    local ok, err = pcall(C_AuctionHouse.SendSearchQuery, itemKey, {}, true)
-    if ok then
-        appendLog("query sent for itemID=" .. tostring(itemID))
+    Probe.Ready("after query")
+    if type(C_Timer) == "table" and type(C_Timer.After) == "function" then
+        C_Timer.After(15, function()
+            if pending == query then finishFailure("no matching result within 15s; outcome=UNKNOWN") end
+        end)
     else
-        appendLog("SendSearchQuery failed: " .. tostring(err))
+        log("timeout timer unavailable; close/reopen AH if query remains pending")
     end
 end
 
 local function dumpSaved()
-    if not db then
-        appendLog("database not initialized")
-        return
-    end
-
-    local build = db.build
-    if build then
-        appendLog("saved build version=" .. tostring(build.version)
-            .. " build=" .. tostring(build.build)
-            .. " interface=" .. tostring(build.interface))
+    local db = Probe.db
+    -- Snapshot before printing: dump output must not evict original evidence.
+    local logs = Probe.Copy(db.logs)
+    log("saved schema=" .. text(db.schema) .. " lastQuery=" .. describe(db.lastQuery))
+    if db.lastSuccess then
+        local saved = db.lastSuccess
+        log("saved lastSuccess " .. describe(saved))
+        log("saved query " .. describe(saved.query))
+        for index, sample in ipairs(saved.samples) do log("saved sample[" .. index .. "] " .. sample) end
+        printSession(saved.evidence, "saved success")
     else
-        appendLog("no saved build snapshot")
+        log("no saved successful observation")
     end
-
-    if db.lastQuery then
-        appendLog("saved lastQuery itemID=" .. tostring(db.lastQuery.itemID)
-            .. " attemptedAt=" .. tostring(db.lastQuery.attemptedAt))
-    else
-        appendLog("no saved query")
-    end
-
-    if db.lastResult then
-        appendLog("saved lastResult kind=" .. tostring(db.lastResult.kind)
-            .. " itemID=" .. tostring(db.lastResult.itemID)
-            .. " rows=" .. tostring(db.lastResult.rowCount)
-            .. " capturedAt=" .. tostring(db.lastResult.capturedAt))
-        for index, description in ipairs(db.lastResult.samples or {}) do
-            appendLog("saved sample[" .. index .. "] " .. tostring(description))
-        end
-    else
-        appendLog("no saved result")
+    if db.lastResult then log("legacy schema-1 lastResult (UNVERIFIED) " .. describe(db.lastResult)) end
+    print("|cff66ccffMarketPilotProbe:|r recent evidence (max 200 entries):")
+    for _, entry in ipairs(logs) do
+        print((("[" .. text(entry.t) .. "] " .. entry.message):gsub("|", "||")))
     end
 end
 
 local function clearSaved()
-    MarketPilotProbeDB = {
-        schema = 1,
-        logs = {},
-    }
-    db = MarketPilotProbeDB
-    saveBuildSnapshot()
-    appendLog("saved probe data cleared")
+    pending = nil
+    MarketPilotProbeDB = { schema = 2, logs = {} }
+    Probe.db = MarketPilotProbeDB
+    Probe.db.session = Probe.session
+    log("saved probe data cleared; current session counters retained")
 end
+
+local function onEvent(_, event, ...)
+    if event == "ADDON_LOADED" then
+        if ... ~= ADDON_NAME then return end
+        Probe.InitDB()
+        Probe.session = { build = Probe.Build(), functions = {}, events = {} }
+        Probe.db.session = Probe.session
+        recordSurface()
+        registerEvents()
+        log("loaded; run /mpprobe status. Candidate signatures remain UNKNOWN in Forever")
+        return
+    end
+    if not Probe.session then return end
+    local observation = Probe.session.events[event]
+    if observation then
+        observation.fired = observation.fired + 1
+        observation.lastFiredAt = Probe.Now()
+    end
+    local arguments = {}
+    for index = 1, select("#", ...) do
+        arguments[#arguments + 1] = "arg" .. index .. "=" .. describe(select(index, ...))
+    end
+    log("event fired " .. event .. " " .. table.concat(arguments, " "))
+    if event == "AUCTION_HOUSE_SHOW" then
+        ahOpen = true
+        recordSurface()
+        Probe.Ready(event)
+    elseif event == "AUCTION_HOUSE_CLOSED" then
+        ahOpen = false
+        if pending then finishFailure("AH closed; query cancelled") end
+    elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" or event == "ITEM_SEARCH_RESULTS_UPDATED" then
+        matchingResult(event, ...)
+    elseif event:find("THROTTLED", 1, true) then
+        Probe.Ready(event)
+    end
+end
+
+frame:SetScript("OnEvent", function(...)
+    local ok, err = pcall(onEvent, ...)
+    if not ok then finishFailure("event handler failed (original error): " .. text(err)) end
+end)
 
 SLASH_MARKETPILOTPROBE1 = "/mpprobe"
 SlashCmdList.MARKETPILOTPROBE = function(input)
-    input = input or ""
-    local command, argument = input:match("^(%S*)%s*(.-)$")
-    command = string.lower(command or "")
-
-    if command == "scan" then
-        queryItem(argument)
-    elseif command == "dump" then
-        dumpSaved()
-    elseif command == "clear" then
-        clearSaved()
-    elseif command == "status" or command == "" then
-        printStatus()
-    else
-        appendLog("commands: status | scan <itemID> | dump | clear")
-    end
+    local ok, err = pcall(function()
+        if not Probe.db then log("database not initialized; check addon load errors"); return end
+        local command, argument = (input or ""):match("^%s*(%S*)%s*(.-)%s*$")
+        command = string.lower(command or "")
+        if command == "scan" then queryItem(argument)
+        elseif command == "dump" then dumpSaved()
+        elseif command == "clear" then clearSaved()
+        elseif command == "status" or command == "" then status()
+        else log("commands: status | scan <itemID> | dump | clear") end
+    end)
+    if not ok then finishFailure("command failed (original error): " .. text(err)) end
 end
 
-frame:SetScript("OnEvent", function(_, event, ...)
-    if event == "ADDON_LOADED" then
-        local loadedName = ...
-        if loadedName ~= ADDON_NAME then
-            return
-        end
-
-        MarketPilotProbeDB = MarketPilotProbeDB or {
-            schema = 1,
-            logs = {},
-        }
-        db = MarketPilotProbeDB
-        saveBuildSnapshot()
-
-        for _, eventName in ipairs(CANDIDATE_EVENTS) do
-            safeRegisterEvent(eventName)
-        end
-
-        appendLog("loaded; run /mpprobe status")
-        return
-    end
-
-    if event == "PLAYER_LOGIN" then
-        saveBuildSnapshot()
-        appendLog("PLAYER_LOGIN")
-    elseif event == "AUCTION_HOUSE_SHOW" then
-        ahOpen = true
-        appendLog("AUCTION_HOUSE_SHOW")
-    elseif event == "AUCTION_HOUSE_CLOSED" then
-        ahOpen = false
-        appendLog("AUCTION_HOUSE_CLOSED")
-    elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
-        local eventItemID = ...
-        local itemID = tonumber(eventItemID) or lastItemID
-        appendLog("COMMODITY_SEARCH_RESULTS_UPDATED arg1=" .. tostring(eventItemID))
-        if itemID then
-            readCommodityResults(itemID)
-        end
-    elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
-        local eventItemKey = ...
-        appendLog("ITEM_SEARCH_RESULTS_UPDATED arg1=" .. describeTable(eventItemKey))
-        if lastItemID then
-            readItemResults(lastItemID, eventItemKey)
-        end
-    elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then
-        appendLog("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
-    elseif event == "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED" then
-        appendLog("AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED " .. describeTable({...}))
-    else
-        appendLog("event=" .. tostring(event))
-    end
-end)
-
-frame:RegisterEvent("ADDON_LOADED")
+local loadedOK, loadedError = pcall(frame.RegisterEvent, frame, "ADDON_LOADED")
+if not loadedOK or loadedError == false then log("cannot register ADDON_LOADED: " .. text(loadedError)) end
