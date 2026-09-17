@@ -88,9 +88,9 @@ Rejected/queued premature query behavior: UNKNOWN
 ## SavedVariables
 
 ```text
-Survives /reload: UNKNOWN
-Survives normal logout: UNKNOWN
-Visible after character switch: UNKNOWN
+Survives /reload: CONFIRMED — user manually verified retained MarketPilotProbe data in the beta client
+Survives normal logout: EXPECTED/UNVERIFIED — deferred; not an MP-01 blocker
+Visible after character switch: EXPECTED/UNVERIFIED — deferred; not an MP-01 blocker
 ```
 
 ## Confirmed deviations from candidate APIs
@@ -103,23 +103,24 @@ observed ready event. No alternative function signatures were needed or inferred
 
 ## Remaining important MP-00 validations
 
-Only the following two important in-game validations remain in this beta update:
+`/reload` persistence is now CONFIRMED by the user's real beta test. Normal logout
+and character-switch persistence remains EXPECTED/UNVERIFIED and deferred. It is
+explicitly **not an MP-01 blocker**; the user authorized the small production
+AuctionAPI/single-item Scanner slice in Issue #2. This does not confirm future
+production persistence: MP-01 has no SavedVariables.
 
-1. **UNKNOWN — `/reload` persistence.** After a successful query, run `/mpprobe dump`,
-   then `/reload` and dump again. Confirm the saved item, timestamp, build and samples
-   survive without another scan.
-2. **UNKNOWN — normal logout + character switch persistence.** After a successful
-   query on the AH alt, log out normally, log into the main character, then run
-   `/mpprobe dump`. Confirm the same saved observation is visible without rescanning.
-
-Do not run `/mpprobe clear` between persistence checks. Offline reload fixtures
-do not confirm client disk persistence. MP-00 remains pending these checks; no
-production scanner work is authorized by this update. Other UNKNOWN entries above
-remain explicitly unverified, including the missing build metadata and `auctionID`
-semantics; they are not silently promoted to CONFIRMED.
+For the deferred check, query on the AH alt, log out normally, log into the main
+character and run `/mpprobe dump`. Confirm the saved item, timestamp, build and
+samples survive without rescanning. Do not run `/mpprobe clear` between checks.
+Offline fixtures do not substitute for this test. Other UNKNOWN entries above
+remain unverified, including the missing build metadata and `auctionID` semantics.
 
 ## Raw notes
 
 2026-09-18 (report received): user confirmed the query/result/UI comparison and
 throttle observations recorded above in the real Forever beta client. Actual test
 timestamp is UNKNOWN. Raw chat logs/screenshots were not included in this update.
+
+2026-09-18 (MP-01 follow-up received): user additionally confirmed probe
+SavedVariables survive `/reload` in the real beta client. Normal logout and
+switching to another character were not tested and remain deferred/unverified.
