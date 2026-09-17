@@ -312,4 +312,68 @@ test("event arguments and large numeric primitive fields are preserved", functio
     assert(f:has("auctionID=123456789012345"))
 end)
 
-print("PASS " .. passed .. " offline tests; no in-game validation performed")
+test("beta-unsupported specific-search event is never registered", function()
+    local unsupported = "AUCTION_HOUSE_THROTTLED_SPECIFIC_SEARCH_READY"
+    local attempted = false
+    local f = fixture(nil, function(f)
+        local register = f.frame.RegisterEvent
+        function f.frame:RegisterEvent(event)
+            if event == unsupported then
+                attempted = true
+                error("fixture unknown event")
+            end
+            return register(self, event)
+        end
+    end)
+    assert(not attempted and f.db.session.events[unsupported] == nil)
+    assert(f.db.session.events.AUCTION_HOUSE_THROTTLED_SYSTEM_READY.registered == true)
+    f:command("status")
+    assert(not f:has(unsupported))
+end)
+
+test("reported commodity snapshots update even when auctionID is unchanged", function()
+    -- Replay supplied primitive values only; this fixture proves no API semantics.
+    local row = { quantity = 265, totalNumberOfOwners = 19, auctionID = 25442 }
+    local f = fixture(nil, function(f)
+        f.count = 1 -- Fixture count; the actual beta row count was not supplied.
+        f.env.C_AuctionHouse.GetCommoditySearchResultInfo = function() return row end
+    end)
+    f:scan(); f:event("COMMODITY_SEARCH_RESULTS_UPDATED", 2770)
+    local earlier = f.db.lastSuccess
+    assert(earlier.samples[1]:find('"quantity"=265', 1, true))
+    assert(earlier.samples[1]:find('"totalNumberOfOwners"=19', 1, true))
+    row = { quantity = 285, totalNumberOfOwners = 20, auctionID = 25442, unitPrice = 200 }
+    f:command("scan 2770"); f:event("COMMODITY_SEARCH_RESULTS_UPDATED", 2770)
+    local later = f.db.lastSuccess
+    assert(later ~= earlier and later.kind == "commodity")
+    for key, value in pairs(row) do
+        assert(later.samples[1]:find('"' .. key .. '"=' .. value, 1, true))
+    end
+    assert(earlier.samples[1]:find('"quantity"=265', 1, true))
+    f:command("dump")
+    assert(f:has('saved sample[1] {"auctionID"=25442, "quantity"=285, "totalNumberOfOwners"=20, "unitPrice"=200}'))
+end)
+
+test("reported throttle transition is logged without automatic follow-up queries", function()
+    local f = fixture(nil, function(f)
+        local send = f.env.C_AuctionHouse.SendSearchQuery
+        f.env.C_AuctionHouse.SendSearchQuery = function(...)
+            send(...)
+            f.ready = false
+        end
+    end)
+    f:scan()
+    assert(f:has("throttle before query ready=true"))
+    assert(f:has("throttle after query ready=false"))
+    f:event("COMMODITY_SEARCH_RESULTS_UPDATED", 2770)
+    f:command("scan 2770")
+    assert(f.sent == 1)
+    f.ready = true
+    f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.db.session.throttle.state == true)
+    assert(f.db.session.events.AUCTION_HOUSE_THROTTLED_SYSTEM_READY.fired == 1)
+    assert(f:has("throttle AUCTION_HOUSE_THROTTLED_SYSTEM_READY ready=true"))
+    assert(f.sent == 1)
+end)
+
+print("PASS " .. passed .. " offline tests; no in-game validation performed by this test suite")

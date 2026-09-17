@@ -44,7 +44,9 @@ The existing candidate calls are deliberately unchanged:
 `MakeItemKey(itemID)`, `SendSearchQuery(itemKey, {}, true)`, commodity count/row
 with `(itemID)` / `(itemID, index)`, item count/row with `(itemKey)` /
 `(itemKey, index)`, and `IsThrottledMessageSystemReady()`.
-Their Forever signatures remain **UNKNOWN**. Failures are logged with the
+Confirmed Copper Ore calls and remaining UNKNOWNs are recorded in
+`docs/API_FINDINGS.md` from the user's beta observations. The probe keeps its
+conservative diagnostic labels across builds. Failures are logged with the
 original error; there is no alternative-signature fallback.
 
 Use only the probe to initiate searches while testing. Events have no proven
