@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: MarketPilotProbe
+## Notes: Temporary WoW Forever Auction House API probe
+## Author: Kivanc / MarketPilot
+## Version: 0.0.1
+## SavedVariables: MarketPilotProbeDB
+
+MarketPilotProbe.lua
