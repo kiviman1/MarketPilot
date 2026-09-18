@@ -42,11 +42,30 @@ function UI:Toggle()
     self:Update()
 end
 
+function UI:IsReadOnly()
+    return self.mode == "STANDALONE" or not self.scanner.ahOpen
+end
+
+function UI:ToggleWatch()
+    if self.frame and self.frame:IsShown() then
+        self.watchRequested = false
+        self:Close()
+    else
+        self.watchRequested = true
+        self:Open()
+    end
+end
+
+function UI:OnHouseClosed()
+    if self.watchRequested then self:Open() else self:Close() end
+end
+
 function UI:ClickItem(itemID)
-    if self.batch.active and self.items.Contains(itemID) then
+    if not self.items.Contains(itemID) then return false end
+    if self.mode == "STANDALONE" or self.batch.active then
         self.selectedItemID = itemID; self:Update(); return true
     end
-    if not self.items.Contains(itemID) or not self.scanner.ahOpen or self.scanner:IsActive()
+    if not self.scanner.ahOpen or self.scanner:IsActive()
         or self.scanner.blockedReason then return false end
     self.selectedItemID = itemID
     self.scanner:Start(itemID)
@@ -55,12 +74,18 @@ function UI:ClickItem(itemID)
 end
 
 function UI:Scan()
-    if self.batch.active then return false end
+    if self:IsReadOnly() or self.batch.active then return false end
     return self:ClickItem(self.selectedItemID)
 end
 
-function UI:StartBatch() self.batch:Start(); self:Update() end
-function UI:CancelBatch() self.batch:Cancel(); self:Update() end
+function UI:StartBatch()
+    if self:IsReadOnly() then return false end
+    self.batch:Start(); self:Update()
+end
+function UI:CancelBatch()
+    if self:IsReadOnly() then return false end
+    self.batch:Cancel(); self:Update()
+end
 function UI:ToggleReport() self.reportMode = not self.reportMode; self:Update() end
 function UI:Scroll(delta)
     self.scroll:SetVerticalScroll(math.max(0, math.min(self.scrollLimit, self.scroll:GetVerticalScroll() + delta)))
@@ -80,7 +105,6 @@ function UI:Create(anchor)
     self.frame = panel
     panel:Hide()
     panel:SetSize(WIDTH, HEIGHT)
-    panel:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 8, 0)
     panel:EnableMouse(true)
     local background = panel:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints(panel)
@@ -180,28 +204,35 @@ function UI:Create(anchor)
     label(self.footer, "^ rising  v falling  = stable  ? insufficient", 14, -8, 328)
     button("Up", self.footer, 340, -3, 40, function(s) s:Scroll(-250) end)
     button("Down", self.footer, 384, -3, 42, function(s) s:Scroll(250) end)
-    self.anchor = anchor
 end
 
 function UI:Open()
-    if not self.scanner.ahOpen then return false end
-    -- External reference only: top-level AuctionHouseFrame, no child-frame hooks.
-    local anchor = AuctionHouseFrame
+    if not self.scanner.ahOpen and not self.watchRequested then return false end
+    local mode = self.scanner.ahOpen and "AH" or "STANDALONE"
+    -- Top-level parents only; switching mode never queries or changes history.
+    local anchor, anchorName
+    if mode == "AH" then anchor, anchorName = AuctionHouseFrame, "AuctionHouseFrame"
+    else anchor, anchorName = UIParent, "UIParent" end
     if (type(anchor) ~= "table" and type(anchor) ~= "userdata") or type(anchor.GetObjectType) ~= "function" then
         self:Close()
-        self:Warn("AuctionHouseFrame unavailable; panel hidden. Debug commands remain available.")
+        self:Warn(anchorName .. " unavailable; panel hidden. Debug commands remain available.")
         return false
     end
     local ok, err = pcall(function()
         if not self.frame then self:Create(anchor) end
-        if self.anchor ~= anchor then error("AH frame changed; reload required") end
+        self.frame:Hide()
+        self.frame:SetParent(anchor)
+        self.frame:ClearAllPoints()
+        if mode == "AH" then self.frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 8, 0)
+        else self.frame:SetPoint("CENTER", anchor, "CENTER", 0, 0) end
+        self.anchor, self.mode = anchor, mode
         self.items.InvalidateMetadata()
         self:Update()
         self.frame:Show()
     end)
     if not ok then
         if self.frame then self.frame:Hide() end
-        if not self.anchor then self.frame, self.rows, self.values = nil, {}, {} end
+        if not self.anchor then self.frame, self.rows, self.values, self.historyValues = nil, {}, {}, {} end
         self:Warn(tostring(err))
         return false
     end
@@ -214,9 +245,10 @@ function UI:Close()
 end
 
 function UI:Update()
-    self.view = MP.UIViewModel.Build(self.scanner, self.selectedItemID, self.items.Metadata(self.selectedItemID))
+    local readOnly = self.mode == "STANDALONE"
+    self.view = MP.UIViewModel.Build(self.scanner, self.selectedItemID, self.items.Metadata(self.selectedItemID), readOnly)
     if not self.frame or not self.anchor then return end
-    if not self.scanner.ahOpen then self:Close(); return end
+    if not self.scanner.ahOpen and not readOnly then self:Close(); return end
     local view = self.view
     self.frame:SetHeight(self.collapsed and 42 or self.expandedHeight)
     self.toggle:SetText(self.collapsed and "+" or "-")
@@ -224,7 +256,7 @@ function UI:Update()
     else self.body:Show(); self.scroll:Show(); self.footer:Show() end
     local data = self.market:Get(self.selectedItemID)
     -- A completed historical observation remains visible after reopening AH.
-    if data.current and (self.scanner.state == "IDLE" or self.scanner.itemID ~= self.selectedItemID) then
+    if data.current and (readOnly or self.scanner.state == "IDLE" or self.scanner.itemID ~= self.selectedItemID) then
         local s = data.current
         view.lowest, view.rawMedian, view.cleanMedian = MP.UIViewModel.Money(s.lowest), MP.UIViewModel.Money(s.rawMedian), MP.UIViewModel.Money(s.cleanMedian)
         view.range = MP.UIViewModel.Money(s.q1) .. " - " .. MP.UIViewModel.Money(s.q3)
@@ -241,10 +273,11 @@ function UI:Update()
     local history = MP.UIViewModel.History(data, self.clock())
     history.changes = history.change7 .. " / " .. history.change30
     for key, widget in pairs(self.historyValues) do widget:SetText(history[key]) end
-    self.progress:SetText(self.batch.state .. "  " .. self.batch.completed .. " / " .. self.batch.total .. "  |  " .. self.scanner.state)
+    self.progress:SetText(readOnly and "READ ONLY | Stored history | Open AH to scan"
+        or self.batch.state .. "  " .. self.batch.completed .. " / " .. self.batch.total .. "  |  " .. self.scanner.state)
     self.historyStatus:SetText(self.market.db.status == "OK" and "History: account-wide / realm + faction" or self.market.db.error)
-    if self.batch.active or self.scanner:IsActive() or self.scanner.uncertainQuery then self.batchButton:Disable() else self.batchButton:Enable() end
-    if self.batch.active then self.cancelButton:Enable() else self.cancelButton:Disable() end
+    if self:IsReadOnly() or self.batch.active or self.scanner:IsActive() or self.scanner.uncertainQuery then self.batchButton:Disable() else self.batchButton:Enable() end
+    if not self:IsReadOnly() and self.batch.active then self.cancelButton:Enable() else self.cancelButton:Disable() end
     self.name:SetText(view.name)
     for _, field in ipairs(FIELDS) do self.values[field[2]]:SetText(view[field[2]]) end
     self.message:SetText(view.message)

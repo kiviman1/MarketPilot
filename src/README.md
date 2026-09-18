@@ -11,7 +11,8 @@ Open AH -> **Scan Gathering Markets** -> watch sequential progress -> select a
 row for detail -> **Market Report**. No scan starts on login/open/reopen. The five
 configured IDs are Mining 2770/2771/2775, Herbalism 2447 and Skinning 2318. Copper
 Ore, Peacebloom and Light Leather query paths were reported live-tested in MP-03;
-2771/2775 remain candidates. Additional beta level-range items are not guessed.
+Tin Ore also produced values in the MP-05 live batch; Silver Ore displayed UNKNOWN.
+Additional beta level-range items are not guessed.
 Names/icons resolve from the client and retain an ID/UNKNOWN fallback.
 
 The watchlist has current clean median, 7d change, trend arrow, 30d percentile,
@@ -25,12 +26,36 @@ history age plus observation guards; NEW/EARLY is expected on initial installati
 During a batch, clicking a row selects detail without another request. Outside a
 batch, MP-03 click-to-scan and Scan/Refresh remain. Repeated clicks cannot create
 parallel queries. Cancel drops unsent items; a dispatched reply may finish and
-save its observation, but starts no next query. AH close cancels/reset/hides;
-reopen does not resume. A safely failed item is recorded and the batch continues.
+save its observation, but starts no next query. AH close cancels/resets and hides
+the automatic AH panel; explicitly requested watch returns to standalone.
+Reopen does not resume. A safely failed item is recorded and the batch continues.
 An ambiguous dispatch stops the batch until AH close/reopen.
 
 Debug helpers: `/mp status`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
+
+## Stored Market Watch anywhere
+
+Use `/mp watch` away from AH to toggle a standalone, read-only window centered on
+`UIParent`. It does not require `AuctionHouseFrame`. Watchlist, selected-item
+detail, history, Market Report, scrolling and collapse use the same Market and
+UIViewModel data as the AH panel. Item clicks only select stored detail. Scan
+Gathering Markets, Scan/Refresh and Cancel are disabled; forced handlers and scan
+debug commands are guarded too. UNKNOWN remains UNKNOWN for items without history.
+
+The same frame docks beside AH when it opens and normal scan controls become
+available. If explicitly opened with `/mp watch`, it returns to standalone on AH
+close. Otherwise the existing AH-only lifecycle still hides it. `/mp watch` on a
+visible window hides it and clears that standalone preference; on a hidden window
+it opens in the current context (AH mode when AH is open). Hiding an AH panel does
+not cancel a running batch; use Cancel for that. Preference/selection/collapse are
+session-only, so use `/mp watch` again after reload or character switch.
+
+Opening/closing, selecting and reporting in standalone neither initializes nor
+writes/prunes history. Normal database initialization/retention runs at addon
+load, with a PLAYER_LOGIN retry if realm/faction was unavailable early; AH open
+retains its initialization fallback. Same-realm/same-faction characters read the
+same account-wide partition. Database schema, key and retention rules are unchanged.
 
 ## Implementation and persistence
 
@@ -71,7 +96,8 @@ More detail: [architecture](../docs/ARCHITECTURE.md),
 
 Own native frame, parent `AuctionHouseFrame`, anchored TOPLEFT to its TOPRIGHT,
 8 UI units right, 440 x 650. Mouse wheel and Up/Down scroll; +/- collapses to 42
-high. No deep Blizzard hooks/replacement. Five reusable rows grouped by category;
+high. Standalone uses the same frame, parent `UIParent`, anchor CENTER to CENTER.
+No deep Blizzard hooks/replacement. Five reusable rows grouped by category;
 7d sparkline has a small deferred placeholder. Native screen fit/font wrapping
 at different UI scales need MP-05 client review. Anchor/render errors print a
 panel UNKNOWN diagnostic and leave scanner debugging available.
@@ -106,7 +132,26 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game MP-05 checklist — not yet performed
+## In-game standalone follow-up — not yet performed
+
+The first live MP-05 batch and first-history display were confirmed in Issue #7;
+that report does not validate the new standalone mode.
+
+1. On the bank alt, scan at AH and note values/counts. Close AH, then use
+   `/mp watch`: centered read-only panel, stored detail/report, scan/refresh/cancel
+   disabled. Select other items, scroll and collapse without new scan debug output.
+2. Toggle `/mp watch` closed and open again: same stored values/counts. Open AH
+   while watch is visible: dock right, scan normally. Close AH: return to standalone.
+   Hide with `/mp watch`, then repeat AH open/close: default AH-only hide behavior.
+3. `/reload` away from AH, then `/mp watch`: stored values visible without scanning.
+   Normal logout -> different same-realm/same-faction main, away from AH ->
+   `/mp watch`: same partition/observations/report. Selection and visibility reset
+   between sessions; stored observations do not.
+4. Check centered window fit, read-only label, missing-history UNKNOWN values and
+   absence of Lua errors. Compare snapshot contents/counts before and after browsing;
+   standalone actions must not add, remove or change snapshots.
+
+## Broader MP-05 checklist
 
 1. Install/reload, open AH: readable right-side panel, five category rows, names/
    icons, collapse/expand, scrolling, no Lua errors, no automatic query. Verify

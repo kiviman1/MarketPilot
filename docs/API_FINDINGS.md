@@ -54,7 +54,8 @@ AUCTION_HOUSE_THROTTLED_SPECIFIC_SEARCH_READY: CONFIRMED unavailable — registr
 ```text
 Copper Ore (2770) result path: CONFIRMED — commodity
 Peacebloom (2447), Light Leather (2318) result paths: CONFIRMED — MP-03 click scans succeeded
-Other configured gathering items' result paths: UNKNOWN
+Tin Ore (2771) current commodity values: CONFIRMED — MP-05 live batch report
+Silver Ore (2775) nonempty commodity result: UNKNOWN — MP-05 panel showed UNKNOWN
 unitPrice unit: CONFIRMED — per-unit price in copper; 200 matches 2 silver/unit in AH UI
 quantity meaning: CONFIRMED — total quantity at that commodity price level; 285 matches the AH UI total of 285
 row aggregation behavior: CONFIRMED — observed commodity quantity is aggregated at its price level
@@ -156,24 +157,44 @@ records that the Peacebloom absurd-price test correctly excluded extreme levels.
 Exact rows, prices, UI scale and screenshots for that test were not supplied here.
 Do not reconstruct them or generalize screen fit to other resolutions.
 
-## MP-05 validation — UNKNOWN / pending
+## MP-05 first batch — CONFIRMED (user live-validation comment)
 
-No new Forever client test was performed during MP-05 implementation. Database,
-batch queue, history mathematics and dashboard tests are offline Lua fixtures.
-The MP-03 observations above do not confirm these new behaviors:
+Source: [Issue #7 comment, 2026-09-18](https://github.com/kiviman1/MarketPilot/issues/7#issuecomment-5727232767).
+The user reported:
+
+- Market Watch renders correctly and the serial batch completes `DONE 5 / 5`.
+- Copper Ore, Tin Ore, Peacebloom and Light Leather produce current values.
+- Silver Ore displays UNKNOWN rather than an invented zero price. The cause of
+  missing values was not supplied; do not infer a successful nonempty result.
+- Light Leather: levels=20, totalQuantity=1925, lowest=25c, highest=500c,
+  rawMedian=27c, cleanMedian=27c, suspicious=0, extreme=0, anomalySufficient=yes.
+- First-history items show NEW with insufficient historical columns (`?`).
+- Market Report shows no supported historical findings yet.
+- History status shows account-wide / realm + faction.
+
+The reported remaining UX gap was inability to open stored history away from AH.
+The account-wide declaration/status is not itself evidence of persistence after
+logout or of realm/faction market-sharing rules.
+
+## MP-05 standalone follow-up — UNKNOWN / pending
+
+The new `/mp watch` standalone lifecycle is tested only in offline Lua fixtures.
+No client test was performed by the coding agent. Remaining in-client checks:
 
 - `MarketPilotDB` save/load, dedupe and retention in the actual client;
 - production history after `/reload`, logout and same-key character switch;
 - actual guarded realm/faction identity strings and key stability;
 - cross-faction/cross-realm AH market-sharing semantics (UNKNOWN; conservative
   separate partitions are an implementation choice, not a verified AH rule);
-- five-item batch event cadence, cancellation, error recovery and long sessions;
-- 440x650 scrollable watchlist/detail/report layout at the user's UI scale;
+- cancellation, error recovery and long batch sessions beyond the reported run;
+- standalone UIParent anchor, read-only controls, toggling and AH docking/return;
+- standalone detail/report after reload and same-key main-character login away
+  from AH, without rescanning or changing stored history;
 - accumulated 7d/30d market history and its client presentation.
 
 Probe persistence remains the previously confirmed account-wide observation;
-it does not itself validate the new production schema. Tin Ore (2771), Silver
-Ore (2775), broader beta material catalogue, result completeness/paging, request
+it does not itself validate the new production schema. Silver Ore (2775) nonempty
+results, broader beta material catalogue, result completeness/paging, request
 identity and normal-item search semantics remain UNKNOWN. No sell-side APIs or
 sale workflows are introduced in this MP-03-based branch. The in-game checklist
 is in [src/README.md](../src/README.md).

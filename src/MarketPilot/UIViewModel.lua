@@ -80,17 +80,18 @@ function View.Report(report, items)
     return table.concat(lines, "\n")
 end
 
-function View.Build(scanner, selectedItemID, metadata)
+function View.Build(scanner, selectedItemID, metadata, readOnly)
     local busy = scanner:IsActive()
-    local current = scanner.state == "DONE" and scanner.sample and scanner.sample.itemID == selectedItemID
+    local current = not readOnly and scanner.state == "DONE" and scanner.sample and scanner.sample.itemID == selectedItemID
     local analysis = current and scanner.analysis
     local raw, clean, anomaly = analysis and analysis.raw, analysis and analysis.clean, analysis and analysis.anomaly
-    local state = scanner.ahOpen and scanner.state or "AH CLOSED"
+    local state = readOnly and "READ ONLY" or (scanner.ahOpen and scanner.state or "AH CLOSED")
     local messages = {
         IDLE = "Choose an item to scan.", WAITING = "Waiting for throttle readiness...",
         QUERYING = "Waiting for commodity results...", COLLECTING = "Reading price levels...",
         DONE = "Current scan complete.", ERROR = "UNKNOWN: scan failed.",
         ["AH CLOSED"] = "Open the Auction House to browse.",
+        ["READ ONLY"] = "No stored observation for this item; open AH to scan.",
     }
     local sufficient = "UNKNOWN"
     if anomaly then sufficient = anomaly.sufficient and "SUFFICIENT" or "INSUFFICIENT" end
@@ -98,7 +99,7 @@ function View.Build(scanner, selectedItemID, metadata)
     if clean and integer(clean.q1, 1) and integer(clean.q3, 1) then
         range = View.Money(clean.q1) .. " - " .. View.Money(clean.q3)
     end
-    local message = scanner.error or messages[state] or "UNKNOWN scanner state"
+    local message = (not readOnly and scanner.error) or messages[state] or "UNKNOWN scanner state"
     if state == "DONE" and not analysis then message = "UNKNOWN: no analysis for the selected item." end
     if analysis and not anomaly.sufficient then
         message = anomaly.reason == "TOO_FEW_PRICE_LEVELS" and "INSUFFICIENT: fewer than 5 distinct prices."
@@ -106,9 +107,9 @@ function View.Build(scanner, selectedItemID, metadata)
     end
     return {
         itemID = selectedItemID, name = metadata.name, icon = metadata.icon, state = state,
-        message = message, scanEnabled = scanner.ahOpen and not busy and not scanner.blockedReason,
-        itemsEnabled = scanner.ahOpen and not busy and not scanner.blockedReason,
-        buttonText = busy and "Scanning..." or (current and "Refresh" or "Scan"),
+        message = message, scanEnabled = not readOnly and scanner.ahOpen and not busy and not scanner.blockedReason,
+        itemsEnabled = readOnly or (scanner.ahOpen and not busy and not scanner.blockedReason),
+        buttonText = readOnly and "Read only - open AH to scan" or (busy and "Scanning..." or (current and "Refresh" or "Scan")),
         lowest = View.Money(raw and raw.min), rawMedian = View.Money(raw and raw.weightedMedian),
         cleanMedian = View.Money(clean and clean.weightedMedian), range = range,
         quantity = count(raw and raw.totalQuantity), levels = count(raw and raw.levelCount),

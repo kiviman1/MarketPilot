@@ -114,14 +114,29 @@ reject the append without rewriting history. Reads return detached whitelist cop
 
 ## Dashboard and report
 
-Parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
+AH parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
 MP-05 uses a 440 x 650 frame with native scrolling, mouse wheel and Up/Down buttons;
 collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
 anchor/render failures hide the panel and print diagnostics.
 
+`/mp watch` toggles that same frame anywhere. Away from AH its mode is STANDALONE,
+parent/anchor `UIParent`, `CENTER -> CENTER`, with a READ ONLY label. Item clicks
+select stored detail; batch/refresh/cancel controls and their handlers are disabled.
+Core also rejects scanning debug commands in this mode. Market/UIViewModel are
+shared with AH mode; no duplicate analytics or database mutation on window actions.
+
+AH open re-parents/re-anchors the frame in AH mode and restores normal scan actions.
+AH close returns it to standalone only when `/mp watch` explicitly requested it;
+otherwise it hides as before. Toggling a visible window off clears this session-only
+preference. Toggling a hidden window on uses AH mode if AH is already open.
+Selection/report/collapse state survives mode changes. No automatic show after
+login/reload. Core retries early missing realm/faction identity at PLAYER_LOGIN;
+the watch command itself does not initialize the DB or run retention. Partition,
+schema and retention are unchanged.
+
 Watchlist: last observed clean median, 7d change, trend arrow, 30d percentile,
 supply and maturity. Selecting during batch changes detail without another query.
-Outside batch, MP-03 item-click scan and Scan/Refresh remain. Detail includes
+Outside batch in AH mode, MP-03 item-click scan and Scan/Refresh remain. Detail includes
 current robust descriptors, history, significance, age and count. Market Report
 lists supported rising, cheap, unusual-return and meaningful-shift observations
 with a maturity summary; failed items are excluded from those lists. Reports use
@@ -129,6 +144,7 @@ each item's latest retained scan, not a synchronized live market. The optional
 sparkline is deferred with a placeholder; numeric history is implemented.
 
 Catalogue remains 2770/2771/2775 (Mining), 2447 (Herbalism), 2318 (Skinning).
-Query paths are live-confirmed for 2770/2447/2318. Additional beta level-range
+Query values are live-confirmed for 2770/2771/2447/2318; 2775 rendered UNKNOWN in
+the first MP-05 batch. Additional beta level-range
 materials remain unconfigured until verified. See [MARKET_MODEL.md](MARKET_MODEL.md)
 for exact mathematics and statistical limitations.

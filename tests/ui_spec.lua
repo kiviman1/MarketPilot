@@ -19,6 +19,8 @@ local function fixture(configure)
         local w = { kind = kind, parent = parent, shown = true, enabled = true, scripts = {}, events = {} }
         f.objects[#f.objects + 1] = w
         function w:GetObjectType() return self.kind end
+        function w:SetParent(parent) self.parent = parent end
+        function w:ClearAllPoints() self.point = nil end
         function w:EnableMouseWheel(value) self.mouseWheel = value end
         function w:SetScrollChild(child) self.child = child end
         function w:GetVerticalScroll() return self.offset or 0 end
@@ -63,11 +65,14 @@ local function fixture(configure)
     end
     f.makeAnchor = function() env.AuctionHouseFrame = widget("Frame"); return env.AuctionHouseFrame end
     f.makeAnchor()
+    env.UIParent = widget("Frame")
     env.print = function(line) f.output[#f.output + 1] = line end
     f.now = 4000000
     env.time = function() return f.now end
     env.GetRealmName = function() return "Fixture Realm" end
     env.UnitFactionGroup = function(unit) assert(unit == "player"); return "Alliance" end
+    f.character = "BankAlt"
+    env.UnitName = function(unit) assert(unit == "player"); return f.character end
     env.GetItemInfo = function(id)
         f.infoCalls[id] = (f.infoCalls[id] or 0) + 1
         if not f.namesReady then return nil end
@@ -503,4 +508,165 @@ test("unknown identity and future schema preserve saved data while current scans
     end
 end)
 
-print("PASS " .. passed .. " UI/batch offline tests (Lua 5.1); real frame rendering remains unverified")
+local function clone(value)
+    if type(value) ~= "table" then return value end
+    local result = {}; for key, v in pairs(value) do result[key] = clone(v) end; return result
+end
+local function same(actual, expected)
+    assert(type(actual) == type(expected))
+    if type(expected) ~= "table" then assert(actual == expected); return end
+    for key, v in pairs(expected) do same(actual[key], v) end
+    for key in pairs(actual) do assert(expected[key] ~= nil) end
+end
+local function watchFixture(configure)
+    local bank = fixture(); bank:event("ADDON_LOADED", "MarketPilot")
+    seed(bank, 2770, { 30 * DAY, 29 * DAY, DAY, 0 }, { 200, 200, 200, 100 })
+    seed(bank, 2447, { 0 }, { 27 })
+    local f = fixture(function(f)
+        f.env.MarketPilotDB = clone(bank.env.MarketPilotDB)
+        f.env.AuctionHouseFrame = nil
+        f.character = "MainCharacter"
+        if configure then configure(f) end
+    end)
+    f.bankKey, f.bankName = bank.mp.market.db.key, bank.env.UnitName("player")
+    f.ahCalls = 0
+    for name, callback in pairs(f.env.C_AuctionHouse) do
+        f.env.C_AuctionHouse[name] = function(...)
+            f.ahCalls = f.ahCalls + 1
+            assert(f.scanner.ahOpen, "AH API called outside AH")
+            return callback(...)
+        end
+    end
+    function f:watch() self.env.SlashCmdList.MARKETPILOT("watch") end
+    f:event("ADDON_LOADED", "MarketPilot"); f:event("PLAYER_LOGIN")
+    return f
+end
+
+test("watch opens stored detail without an AH frame or any AH API call", function()
+    local f = watchFixture(); f:watch()
+    local panel, parent = f.panel.frame, f.env.UIParent
+    assert(f.env.AuctionHouseFrame == nil and not f.scanner.ahOpen and f.panel.mode == "STANDALONE")
+    assert(panel:IsVisible() and panel.parent == parent and panel.point[1] == "CENTER" and panel.point[2] == parent)
+    assert(f.panel.view.state == "READ ONLY" and f.panel.view.cleanMedian == "0g 1s 0c")
+    assert(f.panel.historyValues.median30.text == "0g 2s 0c" and f.panel.historyValues.observations.text == "4 / 30D READY")
+    assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("standalone scan controls and forced clicks/debug commands never start scanner", function()
+    local f = watchFixture(); f:watch()
+    local calls = 0
+    local function forbidden() calls = calls + 1; error("read-only action entered scan/write path") end
+    f.scanner.Start, f.mp.batch.Start, f.mp.batch.Cancel = forbidden, forbidden, forbidden
+    f.mp.market.db.Append, f.mp.market.db.Prune, f.mp.Database.Open = forbidden, forbidden, forbidden
+    assert(not f.panel.batchButton.enabled and not f.panel.scan.enabled and not f.panel.cancelButton.enabled)
+    f.panel.batchButton:Click(true); f.panel.scan:Click(true); f.panel.cancelButton:Click(true)
+    for _, command in ipairs({ "scan", "batch", "cancel" }) do f.env.SlashCmdList.MARKETPILOT(command) end
+    f:watch(); f:watch() -- Opening watch does not initialize/prune/write the database.
+    assert(calls == 0 and f.ahCalls == 0 and f.scanner.state == "IDLE")
+end)
+
+test("standalone item selection changes stored detail without query or history mutation", function()
+    local f = watchFixture(); local before = clone(f.env.MarketPilotDB); f:watch()
+    local itemID = f.scanner.itemID
+    f.panel.rows[2447]:Click()
+    assert(f.panel.selectedItemID == 2447 and f.scanner.itemID == itemID and f.scanner.state == "IDLE")
+    assert(f.panel.view.cleanMedian == "0g 0s 27c" and f.panel.rows[2447].selection.shown)
+    f.panel.rows[2318]:Click()
+    assert(f.panel.view.cleanMedian == "UNKNOWN" and f.panel.view.quantity == "UNKNOWN")
+    assert(f.panel.view.message:find("No stored observation", 1, true))
+    f:complete(); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
+end)
+
+test("standalone Market Report reuses cached stored analytics and supported facts", function()
+    local f = watchFixture(); local before = clone(f.env.MarketPilotDB); f:watch()
+    f.mp.HistoricalAnalytics.Analyze = function() error("standalone duplicated math") end
+    f.panel.reportButton:Click()
+    assert(f.panel.reportText:IsVisible() and not f.panel.detail.shown)
+    assert(f.panel.reportText.text:find("Client item 2770: 30d percentile 0", 1, true))
+    assert(f.panel.reportText.text:find("30D READY: 1", 1, true))
+    f.panel.reportButton:Click(); f.panel.rows[2447]:Click()
+    assert(f.panel.detail:IsVisible() and not f:has("duplicated math"))
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
+end)
+
+test("watch toggles closed and events cannot resurrect it; reopening reuses the frame", function()
+    local f = watchFixture(); f:watch()
+    local panel, n, before = f.panel.frame, #f.objects, clone(f.env.MarketPilotDB)
+    f.panel.rows[2447]:Click(); f.panel.toggle:Click()
+    f:watch(); assert(not panel:IsShown() and not f.panel.watchRequested)
+    f:event("GET_ITEM_INFO_RECEIVED", 2447, true); f:event("AUCTION_HOUSE_CLOSED")
+    f:event("ADDON_LOADED", "Other"); assert(not panel:IsShown())
+    f:watch()
+    assert(panel:IsVisible() and f.panel.frame == panel and #f.objects == n and f.panel.collapsed)
+    assert(f.panel.selectedItemID == 2447)
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
+end)
+
+test("watch frame docks into AH mode and existing scans/batches remain functional", function()
+    local f = watchFixture(); f:watch()
+    local panel, n = f.panel.frame, #f.objects
+    f.makeAnchor(); f:open()
+    assert(f.panel.mode == "AH" and panel.parent == f.env.AuctionHouseFrame and panel.point[1] == "TOPLEFT")
+    assert(panel.point[3] == "TOPRIGHT" and panel.point[4] == 8 and #f.objects == n + 1)
+    assert(f.panel.scan.enabled and f.panel.batchButton.enabled and f.ahCalls == 0)
+    f.panel.rows[2447]:Click(); assert(f.sent[1] == 2447); f:complete()
+    f.panel.batchButton:Click(); assert(#f.sent == 2 and f.mp.batch.active and f.panel.cancelButton.enabled)
+    f.panel.cancelButton:Click(); f:complete()
+    assert(not f.mp.batch.active and #f.sent == 2)
+end)
+
+test("AH close restores explicitly requested watch and preserves history without background work", function()
+    local f = watchFixture(); f:watch(); f.makeAnchor(); f:open()
+    f.panel.scan:Click(); f:complete()
+    local panel, before, calls = f.panel.frame, clone(f.env.MarketPilotDB), f.ahCalls
+    f.ready = false; f.panel.batchButton:Click()
+    calls = f.ahCalls
+    f:event("AUCTION_HOUSE_CLOSED"); f.env.AuctionHouseFrame:Hide()
+    assert(panel:IsVisible() and panel.parent == f.env.UIParent and f.panel.mode == "STANDALONE")
+    assert(f.scanner.state == "IDLE" and not f.mp.batch.active and not f.panel.scan.enabled)
+    f:complete(2770); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == calls)
+    f:watch(); f.env.AuctionHouseFrame:Show(); f:open(); f:event("AUCTION_HOUSE_CLOSED")
+    assert(not panel:IsShown()) -- Opting out restores the default AH-only lifecycle.
+    same(f.env.MarketPilotDB, before)
+end)
+
+test("reload fixture reads stored history outside AH without rescanning", function()
+    local first = watchFixture(); first:watch(); first.panel.rows[2447]:Click()
+    local saved = clone(first.env.MarketPilotDB)
+    local reloaded = watchFixture(function(f) f.env.MarketPilotDB = clone(saved) end)
+    assert(reloaded.panel.frame == nil)
+    reloaded:watch(); reloaded.panel.rows[2447]:Click()
+    assert(reloaded.panel.view.cleanMedian == "0g 0s 27c" and reloaded.ahCalls == 0)
+    same(reloaded.env.MarketPilotDB, saved)
+end)
+
+test("different same-realm/faction character reads bank-alt partition without AH", function()
+    local f = watchFixture(); f:watch()
+    assert(f.env.UnitName("player") ~= f.bankName and f.mp.market.db.key == f.bankKey)
+    assert(#f.mp.market.db:History(2770) == 4 and f.panel.rows[2770].columns.now.text == "1s0c")
+    assert(f.ahCalls == 0)
+end)
+
+test("login retries unavailable early identity without requiring AH or changing key", function()
+    local f = watchFixture(function(f) f.env.GetRealmName = function() return nil end end)
+    assert(f.mp.market.db.status == "UNKNOWN")
+    local before = clone(f.env.MarketPilotDB); f:watch()
+    assert(f.panel.historyStatus.text:find("identity unavailable", 1, true))
+    f.env.GetRealmName = function() return "Fixture Realm" end
+    f:event("PLAYER_LOGIN")
+    assert(f.mp.market.db.key == f.bankKey and f.panel.view.cleanMedian == "0g 1s 0c")
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
+end)
+
+test("lazy AH frame can dock existing standalone after addon-loaded and return safely", function()
+    local f = watchFixture(); f:watch(); local panel = f.panel.frame
+    f:open(); assert(not panel:IsShown() and f:has("AuctionHouseFrame unavailable"))
+    f.makeAnchor(); f:event("ADDON_LOADED", "Blizzard_AuctionHouseUI")
+    assert(panel:IsVisible() and panel.parent == f.env.AuctionHouseFrame and f.panel.mode == "AH")
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(panel:IsVisible() and panel.parent == f.env.UIParent and f.panel.mode == "STANDALONE" and f.ahCalls == 0)
+end)
+
+print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

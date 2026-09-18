@@ -42,14 +42,21 @@ end
 
 local function onEvent(event, itemID, success)
     if event == "GET_ITEM_INFO_RECEIVED" then panel:Guard(panel.MetadataReceived, itemID, success); return end
+    -- Realm/faction may be unavailable at ADDON_LOADED; bind history before any
+    -- watch interaction at login. Opening/closing watch never initializes/writes DB.
+    if event == "PLAYER_LOGIN" then
+        initializeHistory()
+        if panel.anchor then panel:Guard(panel.Update) end
+        return
+    end
     if event == "ADDON_LOADED" then
         if itemID == "MarketPilot" then initializeHistory() end
-        if scanner.ahOpen and not panel.anchor then panel:Open() end
+        if scanner.ahOpen and (not panel.anchor or panel.mode ~= "AH") then panel:Open() end
         return
     end
     if startupError then return end
     if event == "AUCTION_HOUSE_SHOW" then initializeHistory(); scanner:OnHouseOpened(); panel:Open()
-    elseif event == "AUCTION_HOUSE_CLOSED" then batch:Cancel(); scanner:OnHouseClosed(); panel:Close()
+    elseif event == "AUCTION_HOUSE_CLOSED" then batch:Cancel(); scanner:OnHouseClosed(); panel:OnHouseClosed()
     elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then scanner:OnReady()
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID) end
     advance()
@@ -72,7 +79,7 @@ for _, event in ipairs({
     end
 end
 
-for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ADDON_LOADED" }) do
+for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ADDON_LOADED", "PLAYER_LOGIN" }) do
     local ok, err = pcall(frame.RegisterEvent, frame, event)
     if not ok or err == false then debug("optional panel event unavailable: " .. event .. " " .. tostring(err)) end
 end
@@ -81,6 +88,9 @@ SLASH_MARKETPILOT1 = "/mp"
 SlashCmdList.MARKETPILOT = function(input)
     local ok, err = pcall(function()
         local command = (input or ""):match("^%s*(.-)%s*$"):lower()
+        if panel.mode == "STANDALONE" and (command == "scan" or command == "batch" or command == "cancel") then
+            debug("read-only watch; open AH to scan"); return
+        end
         if command == "scan" then
             if startupError then debug(startupError); return end
             if batch.active then debug("batch active; cancel before a manual scan"); return end
@@ -88,10 +98,11 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "batch" then batch:Start(); advance()
         elseif command == "cancel" then batch:Cancel(); panel:Guard(panel.Update)
         elseif command == "report" then panel:Guard(panel.ToggleReport)
+        elseif command == "watch" then panel:Guard(panel.ToggleWatch)
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp batch | /mp cancel | /mp report") end
+        else debug("commands: /mp scan | /mp status | /mp batch | /mp cancel | /mp report | /mp watch") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end
 
-debug("loaded; open AH and click a MarketPilot item. /mp status remains available for debugging")
+debug("loaded; open AH to scan, or /mp watch to browse stored history. /mp status for debugging")
