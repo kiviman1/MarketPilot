@@ -4,29 +4,55 @@ local function debug(message)
     print("|cff66ccffMarketPilot:|r " .. message:gsub("|", "||"))
 end
 
-local panel
+local panel, market, batch
 local function notify(message)
     debug(message)
+    if market then market:Record(MP.scanner) end
     if panel then panel:Guard(panel.Update) end
 end
 local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, notify, time)
 MP.scanner = scanner
-panel = MP.UI.New(scanner, MP.Items, debug)
+batch = MP.BatchScanner.New(scanner, MP.Items)
+market = MP.Market.New(MP.Database.Open(nil), MP.Items)
+MP.batch, MP.market = batch, market
+panel = MP.UI.New(scanner, MP.Items, debug, market, batch, time)
 MP.panel = panel
 local frame = CreateFrame("Frame")
 local startupError
 
+local function initializeHistory()
+    if market.db.status == "OK" then return end
+    local realmOK, realm = false, nil
+    local factionOK, faction = false, nil
+    if type(GetRealmName) == "function" then realmOK, realm = pcall(GetRealmName) end
+    if type(UnitFactionGroup) == "function" then factionOK, faction = pcall(UnitFactionGroup, "player") end
+    local key
+    if realmOK and factionOK and type(realm) == "string" and realm ~= "" and type(faction) == "string" and faction ~= "" then
+        key = "forever-beta:v1:" .. #realm .. ":" .. realm .. ":" .. #faction .. ":" .. faction
+    end
+    local db = MP.Database.Open(MarketPilotDB, key, time())
+    if db.status == "OK" then MarketPilotDB = db.root else debug(db.error) end
+    market.db, market.cache = db, {}
+end
+
+local function advance()
+    batch:Advance()
+    panel:Guard(panel.Update)
+end
+
 local function onEvent(event, itemID, success)
     if event == "GET_ITEM_INFO_RECEIVED" then panel:Guard(panel.MetadataReceived, itemID, success); return end
     if event == "ADDON_LOADED" then
+        if itemID == "MarketPilot" then initializeHistory() end
         if scanner.ahOpen and not panel.anchor then panel:Open() end
         return
     end
     if startupError then return end
-    if event == "AUCTION_HOUSE_SHOW" then scanner:OnHouseOpened(); panel:Open()
-    elseif event == "AUCTION_HOUSE_CLOSED" then scanner:OnHouseClosed(); panel:Close()
+    if event == "AUCTION_HOUSE_SHOW" then initializeHistory(); scanner:OnHouseOpened(); panel:Open()
+    elseif event == "AUCTION_HOUSE_CLOSED" then batch:Cancel(); scanner:OnHouseClosed(); panel:Close()
     elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then scanner:OnReady()
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID) end
+    advance()
 end
 
 frame:SetScript("OnEvent", function(_, event, ...)
@@ -57,9 +83,13 @@ SlashCmdList.MARKETPILOT = function(input)
         local command = (input or ""):match("^%s*(.-)%s*$"):lower()
         if command == "scan" then
             if startupError then debug(startupError); return end
-            scanner:Start()
+            if batch.active then debug("batch active; cancel before a manual scan"); return end
+            scanner:Start(panel.selectedItemID)
+        elseif command == "batch" then batch:Start(); advance()
+        elseif command == "cancel" then batch:Cancel(); panel:Guard(panel.Update)
+        elseif command == "report" then panel:Guard(panel.ToggleReport)
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status (selected itemID=" .. scanner.itemID .. ")") end
+        else debug("commands: /mp scan | /mp status | /mp batch | /mp cancel | /mp report") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end

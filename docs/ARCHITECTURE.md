@@ -1,173 +1,134 @@
 # Architecture
 
-## Design target
+## MP-05 direction
 
-MarketPilot should remain small enough to understand at a glance while still separating volatile WoW API behavior from stable market logic.
+MarketPilot is a lightweight gathering-market intelligence terminal. This branch
+starts at validated MP-03, not the sale-assistant branches. The workflow is scan
+-> robust statistics -> compact history -> descriptive analytics -> dashboard.
+There is no Inventory, Pricing, Sale Assistant or posting module. Probe is unchanged.
 
 ## Module boundaries
 
-### Core.lua
-Owns addon initialization, top-level events, slash-command registration, and module wiring. It must not contain scan algorithms or price mathematics.
-
-### AuctionAPI.lua
-The only production module allowed to call `C_AuctionHouse` or future Forever-specific AH APIs directly. Converts Blizzard-specific responses into MarketPilot-owned data structures.
-
-Public surface should stay narrow, for example:
-
-```lua
-AuctionAPI:IsAvailable()
-AuctionAPI:IsReady()
-AuctionAPI:QueryItem(itemID)
-AuctionAPI:ReadCurrentResults(itemID)
-```
-
-Exact signatures remain provisional until MP-00 finishes.
-
-### Items.lua
-Static catalogue of gathering-related item IDs and categories. Names/icons should be resolved through the client when practical rather than duplicated manually.
-
-### Scanner.lua
-Owns the scan queue and scan state machine. It requests one item at a time through `AuctionAPI` and advances only when the API/event state allows it.
-
-Planned states:
-
-```text
-IDLE
-WAITING
-QUERYING
-COLLECTING
-PROCESSING
-DONE
-ERROR
-```
-
-No nested timer chains. No per-frame AH polling.
-
-### Statistics.lua
-Pure Lua. Input is normalized price-level data; output is robust descriptive statistics and anomaly classifications. No WoW APIs and no SavedVariables writes.
-
-### Database.lua
-Owns account-wide persistence, schema versioning, compact snapshots, retention, and migration. It does not decide sale prices.
-
-### Pricing.lua
-Consumes current statistics plus history and produces reference outputs such as market value, lowest valid price, and optional fast/normal/patient targets. It must expose insufficient-data states rather than invent confidence.
-
-### UI.lua
-Owns a separate AH side panel and item/refresh click handlers. It requests scans
-through Scanner and consumes the stored sample/analysis; it never calls the AH
-API or recalculates statistics. `UIViewModel.lua` maps scanner state to display
-fields and formats integer copper, separately from native frame creation.
-
-## Dependency direction
-
-Implemented through MP-03:
+| Module | Responsibility |
+|---|---|
+| Core | Initialization, guarded runtime identity, root binding, events, debug commands and wiring |
+| AuctionAPI | Sole AH API boundary: IsAvailable, IsReady, QueryCommodity, ReadCommodityResults |
+| Items | Category IDs, flat ordered List(), cached client names/icons |
+| Scanner | One request; WAITING/QUERYING/COLLECTING/DONE/ERROR state machine |
+| BatchScanner | Configured-item queue, serial progress, cancel, per-item outcomes |
+| Statistics | Unchanged pure MP-02-v1 current-scan raw/clean descriptors and anomaly rows |
+| Database | Schema validation, whitelist snapshots, dedupe and retention; injected root/key/time |
+| HistoryMath | Pure median, MAD and numeric guards |
+| HistoricalAnalytics | Pure rolling references, Theil-Sen trends, robust returns and supply |
+| Significance | Pure two-sided, tie-corrected Mann-Whitney normal approximation |
+| MarketSignal | Pure descriptive price/trend/supply/volatility labels |
+| Market | Completed-scan persistence, latest observations, cached analytics and report aggregation |
+| UIViewModel | Presentation: formatting, missing-data labels, watch/detail/report text |
+| UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
 
 ```text
 Core -> Scanner -> AuctionAPI
                 -> Statistics
-     -> UI -> Scanner (manual item/refresh requests)
-           -> UIViewModel (presentation only)
+     -> BatchScanner -> Scanner
+     -> Market -> Database -> HistoryMath
+               -> HistoricalAnalytics -> Significance -> HistoryMath
+                                      -> HistoryMath
+               -> MarketSignal
+     -> UI -> Scanner / BatchScanner / Market / Items
+           -> UIViewModel -> HistoryMath (numeric guard only)
 ```
 
-`Items` contains a small Mining/Herbalism/Skinning ID catalogue and cached client
-display metadata. Copper Ore remains the default and the confirmed commodity.
-Statistics is a pure
-`Analyze(sample)` function returning raw/clean descriptors and log-price anomaly
-diagnostics. Scanner keeps the original normalized sample and a separate analysis
-in memory, calls analysis once per completed scan, and clears both on reset.
-The MP-02-v1 formulas/thresholds are specified in `MARKET_MODEL.md`.
+Core records a completed sample before updating the panel. Queue advancement
+happens after the scanner event handler returns, not recursively from its state
+notifications. Analytics are cached per item until a scan/error changes them.
+Metadata, collapse and report rendering reuse the cache. No timers, OnUpdate,
+automatic login scans or scans with AH closed.
 
-Core updates the panel on scanner notifications and AH lifecycle events. Metadata
-arrivals refresh cached labels/icons. There are no per-frame scripts or timers.
-The panel uses its own frame parented to the top-level `AuctionHouseFrame`, anchored
-`TOPLEFT -> TOPRIGHT` with offsets `(8, 0)`. No Blizzard child frames are accessed
-or hooked. Missing anchors/rendering errors hide the panel and emit a diagnostic;
-scanner debugging remains available. Collapse hides only our body. AH close hides
-the whole panel and resets the scan. Sale Assistant is static MP-04 placeholder text.
+## Query lifecycle
 
-External source references (not evidence of Forever compatibility):
-[Blizzard AH frame source mirror](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseFrame.xml)
-and [client item API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ItemDocumentation.lua).
-Actual frame availability/layout and metadata behavior remain an in-client check.
+`IDLE -> WAITING -> QUERYING -> COLLECTING -> DONE`; errors enter ERROR. Next batch
+item starts only after completion or safe failure. Scanner checks readiness on
+each request and the system-ready event. Result-read errors are recorded and the
+batch proceeds; a failed dispatch is ambiguous and stops further requests until
+AH close/reopen. No automatic retry or timeout.
 
-The broader graph below remains a future plan; MP-03 has no Database or Pricing:
+Cancel discards the unsent queue. WAITING cancels immediately. A dispatched query
+drains its single reply and may save that requested observation; new requests
+remain blocked until it finishes. AH close cancels batch and resets Scanner; late
+events while closed are ignored. Reopen never starts a scan. Concurrent queries
+from other addons/default AH UI cannot be correlated without a verified request ID.
 
-```text
-Core
- ├─ Scanner ──> AuctionAPI
- │    └─> Statistics
- │          └─> Database
- └─ Pricing ──> Database
-      └─> UI
-```
+Batch outcomes are session-only `{ state, error }` per item. Errors never become
+zero-price history. A valid empty scan persists zero counts and absent prices,
+with `anomalySufficient=false`.
 
-The exact wiring can vary, but these rules must hold:
+## Persistence contract
 
-- no cyclic dependencies;
-- no AH API calls from UI/Statistics/Database/Pricing;
-- no pricing logic inside Database;
-- no persistence logic inside Statistics.
-
-## Data contracts
-
-### Normalized current market sample
-
-Candidate shape after MP-00 confirms live result semantics:
-
-```lua
-{
-  itemID = 2770,
-  capturedAt = 0,
-  priceLevels = {
-    { unitPrice = 4200, quantity = 80 },
-    { unitPrice = 4300, quantity = 120 },
-  },
-}
-```
-
-All prices use integer copper internally.
-
-### Compact snapshot
-
-```lua
-{
-  timestamp = 0,
-  median = 0,
-  q1 = 0,
-  q3 = 0,
-  mad = 0,
-  lowestValid = 0,
-  validPriceLevels = 0,
-  validQuantity = 0,
-  suspiciousCount = 0,
-  extremeCount = 0,
-}
-```
-
-Raw scan rows should normally die after processing.
-
-## Persistence
-
-Production SavedVariables will be account-wide and partitioned at least by market identity (realm/region/faction only if the live Forever AH rules make those dimensions relevant). Do not hard-code a realm/faction partition until beta behavior is confirmed.
-
-Suggested root:
+Account-wide TOC variable:
 
 ```lua
 MarketPilotDB = {
   schema = 1,
-  markets = {},
+  markets = {
+    [marketKey] = { items = {
+      [itemID] = { snapshots = {
+        { t = 0, rawMedian = 200, cleanMedian = 199, q1 = 190, q3 = 200,
+          lowest = 170, totalQuantity = 775, levelCount = 4,
+          suspicious = 0, extreme = 0, anomalySufficient = false },
+      } },
+    } },
+  },
 }
 ```
 
-## Performance principles
+`t` uses the existing scanner's `time()` Unix timestamp, not a newly assumed AH
+timestamp. Prices are positive exact integer copper, counts nonnegative exact
+integers. Unknown prices are absent (`nil`), never zero. Writer copies only these
+eleven primitive fields. Raw levels, anomaly rows, API tables and historical
+metrics are never persisted. Scanner's raw sample is session memory and is cleared
+on the next request/AH close.
 
-- Scan only configured gathering items.
-- Event-driven queue advancement.
-- No full-market replication in v1.
-- No repeated sorting when cached sorted data can be reused inside one calculation.
-- Persist summaries, not thousands of raw rows.
-- UI refreshes on state/data changes, not every frame.
+Conservative identity:
+`forever-beta:v1:<realm-length>:<realm>:<faction-length>:<faction>`.
+Core accepts successful nonempty strings from guarded `GetRealmName()` and
+`UnitFactionGroup("player")`. Length prefixes avoid ambiguous keys. Same-realm,
+same-faction characters share history; other partitions are isolated. This does
+**not** assert Forever's actual faction/realm market-sharing semantics. Character
+name and guessed region are not included. Missing identity disables persistence,
+preserves saved data and reports UNKNOWN; scanning still works. Actual identity
+output and production cross-character persistence await beta validation. Changing
+sharing semantics later requires an explicit migration.
 
-## Compatibility principle
+Dedupe compares all core fields except `t` with the last stored observation:
+unchanged and less than 600 seconds apart -> no new row. Exactly 600 seconds or
+any changed core value -> store. Dedupe neither moves the retained timestamp nor
+inflates historical count. Actual last-scan time is session-only; after reload
+age refers to the last retained observation.
 
-Forever beta may change. Compatibility work must be localized to `AuctionAPI` and, before that exists, to the isolated probe. A Blizzard API rename should not require edits to Statistics, Database, Pricing, or UI.
+Retention runs on open for all partitions and append for the touched item: keep
+at most 200 snapshots and remove timestamps older than 60 days, oldest first.
+The exact 60-day boundary is retained. No background pruning. Full schema
+validation precedes mutation. Unsupported/malformed roots are preserved without
+automatic reset/migration; history is blocked with a diagnostic. Backward clocks
+reject the append without rewriting history. Reads return detached whitelist copies.
+
+## Dashboard and report
+
+Parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
+MP-05 uses a 440 x 650 frame with native scrolling, mouse wheel and Up/Down buttons;
+collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
+anchor/render failures hide the panel and print diagnostics.
+
+Watchlist: last observed clean median, 7d change, trend arrow, 30d percentile,
+supply and maturity. Selecting during batch changes detail without another query.
+Outside batch, MP-03 item-click scan and Scan/Refresh remain. Detail includes
+current robust descriptors, history, significance, age and count. Market Report
+lists supported rising, cheap, unusual-return and meaningful-shift observations
+with a maturity summary; failed items are excluded from those lists. Reports use
+each item's latest retained scan, not a synchronized live market. The optional
+sparkline is deferred with a placeholder; numeric history is implemented.
+
+Catalogue remains 2770/2771/2775 (Mining), 2447 (Herbalism), 2318 (Skinning).
+Query paths are live-confirmed for 2770/2447/2318. Additional beta level-range
+materials remain unconfigured until verified. See [MARKET_MODEL.md](MARKET_MODEL.md)
+for exact mathematics and statistical limitations.

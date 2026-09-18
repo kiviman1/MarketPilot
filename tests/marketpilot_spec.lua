@@ -81,14 +81,17 @@ local function test(name, run)
 end
 
 test("TOC order and static production boundaries", function()
-    assert(table.concat(files, ",") == "Items.lua,AuctionAPI.lua,Statistics.lua,Scanner.lua,UIViewModel.lua,UI.lua,Core.lua")
-    assert(not toc:find("SavedVariables", 1, true))
+    assert(table.concat(files, ",") == "Items.lua,AuctionAPI.lua,Statistics.lua,HistoryMath.lua,Database.lua,Significance.lua,HistoricalAnalytics.lua,MarketSignal.lua,Scanner.lua,BatchScanner.lua,Market.lua,UIViewModel.lua,UI.lua,Core.lua")
+    assert(toc:find("## SavedVariables: MarketPilotDB", 1, true))
     for _, name in ipairs(files) do
         local source = read(ROOT .. name)
         assert(not source:find("auctionID", 1, true), name)
         assert(not source:find("OnUpdate", 1, true), name)
         assert(not source:find("C_Timer", 1, true), name)
-        assert(not source:find("MarketPilotDB", 1, true), name)
+        for _, forbidden in ipairs({ "PostCommodity", "PostItem", "C_Container", "Sale Assistant" }) do
+            assert(not source:find(forbidden, 1, true), name .. " " .. forbidden)
+        end
+        if name ~= "Core.lua" then assert(not source:find("MarketPilotDB", 1, true), name) end
         assert(not source:find("SPECIFIC_SEARCH_READY", 1, true), name)
         if name ~= "AuctionAPI.lua" then assert(not source:find("C_AuctionHouse", 1, true), name) end
     end

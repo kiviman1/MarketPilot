@@ -53,7 +53,8 @@ AUCTION_HOUSE_THROTTLED_SPECIFIC_SEARCH_READY: CONFIRMED unavailable — registr
 
 ```text
 Copper Ore (2770) result path: CONFIRMED — commodity
-Other gathering items' result paths: UNKNOWN
+Peacebloom (2447), Light Leather (2318) result paths: CONFIRMED — MP-03 click scans succeeded
+Other configured gathering items' result paths: UNKNOWN
 unitPrice unit: CONFIRMED — per-unit price in copper; 200 matches 2 silver/unit in AH UI
 quantity meaning: CONFIRMED — total quantity at that commodity price level; 285 matches the AH UI total of 285
 row aggregation behavior: CONFIRMED — observed commodity quantity is aggregated at its price level
@@ -145,9 +146,34 @@ Prices are copper per unit. The insufficient classification with four price
 levels is expected and was confirmed in-client. Per-level quantities were not
 provided; do not reconstruct them from these aggregate observations.
 
-## MP-03 validation — UNKNOWN / pending
+## MP-03 validation — CONFIRMED (user report)
 
-The side panel, top-level `AuctionHouseFrame` anchor, client item metadata lookup,
-screen fit and click-driven browsing have not yet been observed in Forever beta.
-Additional configured item IDs beyond Copper Ore have not been confirmed as
-commodity queries. Offline frame fixtures do not confirm these client behaviors.
+The user reported real Forever beta validation before the MP-05 direction change:
+the right-side panel works; Copper Ore, Peacebloom and Light Leather scan by click;
+outlier information displays correctly; collapse/expand works; AH close hides the
+panel and reopen restores it; no Lua error was observed. Issue #7 additionally
+records that the Peacebloom absurd-price test correctly excluded extreme levels.
+Exact rows, prices, UI scale and screenshots for that test were not supplied here.
+Do not reconstruct them or generalize screen fit to other resolutions.
+
+## MP-05 validation — UNKNOWN / pending
+
+No new Forever client test was performed during MP-05 implementation. Database,
+batch queue, history mathematics and dashboard tests are offline Lua fixtures.
+The MP-03 observations above do not confirm these new behaviors:
+
+- `MarketPilotDB` save/load, dedupe and retention in the actual client;
+- production history after `/reload`, logout and same-key character switch;
+- actual guarded realm/faction identity strings and key stability;
+- cross-faction/cross-realm AH market-sharing semantics (UNKNOWN; conservative
+  separate partitions are an implementation choice, not a verified AH rule);
+- five-item batch event cadence, cancellation, error recovery and long sessions;
+- 440x650 scrollable watchlist/detail/report layout at the user's UI scale;
+- accumulated 7d/30d market history and its client presentation.
+
+Probe persistence remains the previously confirmed account-wide observation;
+it does not itself validate the new production schema. Tin Ore (2771), Silver
+Ore (2775), broader beta material catalogue, result completeness/paging, request
+identity and normal-item search semantics remain UNKNOWN. No sell-side APIs or
+sale workflows are introduced in this MP-03-based branch. The in-game checklist
+is in [src/README.md](../src/README.md).

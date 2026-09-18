@@ -46,6 +46,7 @@ function Scanner:OnHouseOpened()
 end
 
 function Scanner:OnHouseClosed()
+    self.uncertainQuery = nil
     self.analysis = nil
     self.ahOpen = false
     self.state, self.sample, self.summary, self.error = "IDLE", nil, nil, nil
@@ -56,7 +57,15 @@ function Scanner:IsActive()
     return ACTIVE[self.state] == true
 end
 
+function Scanner:CancelWaiting()
+    if self.state == "WAITING" then
+        self.state, self.error = "IDLE", nil
+        self.notify("pending scan cancelled before dispatch. " .. self:Summary())
+    end
+end
+
 function Scanner:Start(itemID)
+    if self.uncertainQuery then self:Fail("UNKNOWN: prior dispatch uncertain; close/reopen AH"); return end
     if ACTIVE[self.state] then
         self.notify("scan already pending; no additional query. " .. self:Summary())
         return
@@ -85,7 +94,7 @@ function Scanner:TryQuery()
     end
     self.state = "QUERYING"
     local ok, queryError = self.api:QueryCommodity(self.itemID)
-    if not ok then self:Fail(queryError); return end
+    if not ok then self.uncertainQuery = true; self:Fail(queryError); return end
     self.queryCount = self.queryCount + 1
     self.notify("one query sent; waiting for matching commodity result. " .. self:Summary())
 end

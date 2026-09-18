@@ -2,7 +2,7 @@ local _, MP = ...
 
 local Items = {
     testItemID = 2770,
-    -- Representative IDs only. Commodity behavior beyond 2770 needs beta tests.
+    -- Known IDs; live commodity paths confirmed for 2770, 2447 and 2318.
     categories = {
         { name = "Mining", itemIDs = { 2770, 2771, 2775 } },
         { name = "Herbalism", itemIDs = { 2447 } },
@@ -10,6 +10,14 @@ local Items = {
     },
 }
 MP.Items = Items
+
+function Items.List()
+    local result = {}
+    for _, category in ipairs(Items.categories) do
+        for _, id in ipairs(category.itemIDs) do result[#result + 1] = id end
+    end
+    return result
+end
 
 function Items.Contains(itemID)
     for _, category in ipairs(Items.categories) do

@@ -1,67 +1,58 @@
 # MarketPilot
 
-Private, lightweight World of Warcraft Forever market-analysis addon for personal use.
+Private, lightweight WoW Forever market-intelligence terminal for Mining,
+Herbalism and Skinning commodities.
 
-## Goal
+## Current phase: MP-05
 
-MarketPilot will scan only gathering-related Auction House markets (Mining, Herbalism/Cultivation, and Skinning), build a small local price history, reject obvious price anomalies, and show a robust reference price for selling gathered materials.
-
-The project intentionally does **not** try to become a full Auction House suite.
-
-## Current phase: MP-00
-
-Before building the real addon, verify the live WoW Forever beta Auction House API inside the client.
-
-The repository currently contains a small `MarketPilotProbe` addon. It is intentionally isolated from the future production addon so that API assumptions do not leak into the architecture.
-
-### Probe install
-
-Copy the `probe/MarketPilotProbe` folder into the WoW Forever beta AddOns directory, enable the addon, enter the game, and open an Auction House.
-
-Useful commands:
+Starting from the validated MP-03 side panel:
 
 ```text
-/mpprobe status
-/mpprobe scan 2770
-/mpprobe dump
-/mpprobe clear
+Open AH -> Scan Gathering Markets -> robust Statistics -> compact account-wide history
+        -> trend / change / percentile / volatility / supply / significance
+        -> market watch, selected-item detail and Market Report
 ```
 
-`2770` is used only as the initial Copper Ore test item. If that item is unavailable or changed in Forever, use another known gathering item ID.
+This branch has no Sale Assistant, Inventory, Pricing or posting workflow.
+No buying, selling, mail automation or whole-AH scan. MP-04/MP-04B are not its base.
+The user remains the decision maker; signals are descriptive observations.
 
-## Planned architecture
+Install the complete `src/MarketPilot/` folder into the client's `Interface/AddOns/`.
+See [production instructions and beta checklist](src/README.md),
+[architecture/schema](docs/ARCHITECTURE.md), [exact model](docs/MARKET_MODEL.md),
+and [confirmed versus unknown beta behavior](docs/API_FINDINGS.md).
+MP-05 is tested offline; its new persistence, batch flow and dashboard still require
+real Forever beta validation.
+
+## Boundaries
+
+- AH calls only in AuctionAPI; one event-driven Scanner query at a time.
+- Statistics, HistoricalAnalytics, Significance and MarketSignal are pure Lua.
+- Database writes compact versioned snapshots, never raw auction rows.
+- UI consumes analysis; no per-frame processing or external framework.
+- UNKNOWN/INSUFFICIENT is preserved. No automatic destructive schema reset.
+
+Read `AGENTS.md` and the active GitHub issue before changing code. Completed
+foundation: MP-00 isolated probe, MP-01 scanner, MP-02 robust statistics, MP-03
+side panel. MP-05 is the new market-intelligence direction; live posting is not
+part of it.
+
+## Isolated probe
+
+`probe/MarketPilotProbe` remains available for API diagnostics. Install separately;
+commands: `/mpprobe status`, `/mpprobe scan 2770`, `/mpprobe dump`, `/mpprobe clear`.
+Avoid concurrent same-item production/probe queries during validation.
+
+## Tests
+
+From repository root using Lua 5.1:
 
 ```text
-Core
- ├─ Scanner ──> AuctionAPI
- │    │
- │    └─> Statistics ──> Database
- │
- └─> Pricing ──> UI
+lua tests/marketpilot_spec.lua
+lua tests/statistics_spec.lua
+lua tests/history_spec.lua
+lua tests/ui_spec.lua
+lua probe/tests/probe_spec.lua
 ```
 
-Rules:
-
-- WoW Auction House calls live only behind `AuctionAPI`.
-- `Statistics` is pure Lua and does not call WoW APIs.
-- `Database` stores data; it does not calculate prices.
-- `UI` presents state; it does not send Auction House queries.
-- No framework dependency unless a concrete need is proven.
-- No automatic buying or selling.
-- No whole-AH scan unless later testing proves it is necessary and safe.
-
-See `AGENTS.md` and `docs/` before making code changes.
-
-## Roadmap
-
-1. **MP-00** — beta Auction House API probe.
-2. **MP-01** — narrow gathering-item scanner.
-3. **MP-02** — robust statistics: median, MAD, IQR, anomaly classification.
-4. **MP-03** — account-wide SavedVariables and snapshot history.
-5. **MP-04** — pricing/reference layer.
-6. **MP-05** — small Auction House panel and `/mp` viewer.
-7. **MP-06** — confidence and historical significance analysis after enough data exists.
-
-## Scope
-
-Private personal project. Optimize for correctness, low memory/CPU use, clear boundaries, and easy beta iteration rather than distribution or feature count.
+Optimize for correctness, compact state, clear boundaries and easy beta iteration.

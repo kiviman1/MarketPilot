@@ -2,8 +2,8 @@
 
 Sections 1–8 define the implemented **MP-02-v1** current-scan model. Changes to
 quantiles, thresholds or guards require an explicit model-version/documentation
-and deterministic-test update. Sections 9–12 are future design notes, not MP-02
-features. MP-02 returns descriptors and classifications, never a sale recommendation.
+and deterministic-test update. Sections 9–14 define **MP-05-v1** history and
+descriptive signals. Neither model produces trading commands or sale targets.
 
 ## 1. Normalize price
 
@@ -160,86 +160,202 @@ Scanner calls it once after a successful result read, retains both sample and
 analysis in memory, and appends raw/clean weighted medians, suspicious/extreme
 counts and anomaly sufficiency to completion and `/mp status` output.
 
-No `lowestValid` trading rule, history, p-value, confidence score or pricing target
-is implemented. Broad/multimodal markets, several simultaneous anomalies and
+Statistics itself has no history, p-value, confidence score or pricing target.
+Broad/multimodal markets, several simultaneous anomalies and
 tiny/degenerate distributions may mask anomalies. Suspicious or undetected levels
 with large quantities can affect weighted descriptors because they are deliberately
 retained. Classification is evidence of an unusual current-scan price, not proof
 of manipulation or an instruction to trade. Log metrics are floating-point;
 values extremely near a strict threshold can be numerically sensitive.
 
-## 9. Snapshot history (future; not MP-02)
+## 9. Snapshot history and rolling references (MP-05-v1)
 
-The user is expected to scan roughly 2–3 times per day, not hourly.
+History consumes compact snapshots, never auction rows. Retention, schema and
+market identity are specified in [ARCHITECTURE.md](ARCHITECTURE.md). Snapshots with
+`anomalySufficient=false` retain that limitation; their positive cleanMedian is a
+valid descriptor, not proof of reliable outlier filtering, and remains eligible
+for history. Empty/invalid prices never become zeros or previous-price carry-forwards.
 
-Persist compact scan summaries. Build daily summaries from those snapshots:
+Analysis is **as of the latest observation's timestamp**, not wall-clock now.
+Reports do not extrapolate while the AH is closed. Last scan age is shown separately.
+Future observations and values older than 60 days relative to that timestamp are
+excluded. Valid prices are positive exact integer copper. Equal timestamps count
+once (last input wins; explicit current replaces that timestamp), preventing
+zero-time slope pairs. Input tables are never mutated.
 
-```text
-daily median
- daily Q1/Q3
- daily low/high of clean medians
- scan count
-```
+Each snapshot gets equal historical weight, irrespective of its item quantity.
+The conventional median is the middle sorted value for odd n, or the average of
+the two central values for even n. A historical median can therefore be half a
+copper; UI labels it as a statistic without rounding an actual observed price.
+Current-scan weighted quantiles remain discrete integer copper (section 3).
 
-Retention target for v1:
-
-- recent raw compact snapshots: keep enough for intraday context;
-- long history: daily summaries;
-- no raw auction-row archive by default.
-
-## 10. Significance (future; not MP-02)
-
-Do not show a p-value during the first few days just because a function can calculate one.
-
-Historical significance should use daily values or another defensible de-correlated series, not repeated observations of the same auction listings.
-
-Initial plan after enough history exists:
-
-- compare recent daily market values with a prior baseline using a non-parametric test such as Mann–Whitney U;
-- require `p < 0.05`;
-- also require a practical median price move of at least 10%.
-
-A statistically significant but economically tiny move should not be labelled a meaningful market movement.
-
-## 11. Confidence (future; not MP-02)
-
-Confidence is separate from price direction.
-
-Inputs may include:
-
-- current usable price-level count;
-- current usable quantity;
-- percentage of observations flagged;
-- number of historical days;
-- recency of last scan;
-- disagreement between price-level and quantity-weighted medians.
-
-Initial UI labels:
+For D = 1, 7, 30 days, historical baseline is `[t-D*86400, t)`; the current point
+is excluded so it cannot be its own reference. To publish a window median/change/
+supply ratio require at least three valid prior prices within that window **and**
+at least D days since the oldest retained valid observation. Otherwise those
+metrics are INSUFFICIENT. This is an age/count guard, not a claim of continuous
+coverage. Missing days are not interpolated. Boundary observations are included.
 
 ```text
-LOW
-MEDIUM
-HIGH
+medianD = median(valid cleanMedian in baseline D)
+changeD = 100 * (current.cleanMedian / medianD - 1)
+quantityMedianD = median(valid totalQuantity in baseline D)
+supplyRatioD = current.totalQuantity / quantityMedianD
 ```
 
-Do not expose false precision such as `93.7% confidence` unless a calibrated model is later developed.
+No zero denominator or missing value is substituted. Quantity is the factual raw
+total across levels, not the clean quantity. A real current zero quantity gives
+ratio zero when a positive historical denominator exists. Supply is unavailable
+when historical median quantity is zero.
 
-## 12. Planned broader outputs (future; not MP-02)
-
-Statistics should return facts, not trading commands:
+30d percentile also requires the mature 30d window above:
 
 ```text
-marketMedian
-quantityWeightedMedian
-q1
-q3
-mad
-lowestValid
-validQuantity
-validPriceLevels
-suspiciousCount
-extremeCount
-confidenceInputs
+percentile30d = 100 * (count(history < current) + 0.5*count(history == current)) / n
 ```
 
-The separate Pricing module decides how these values are presented as reference sale targets.
+This midrank tie rule gives 50 for all equal prices, 0 below every observation,
+and 100 above every observation. The current point is excluded from n.
+
+Maturity uses valid distinct-time observations including current: NEW if n<3;
+otherwise EARLY if span<7 days, 7D READY if 7<=span<30 days, 30D READY if span>=30
+days. A mature but sparse history may still fail individual metric guards.
+
+## 10. Robust trend
+
+Use valid observations in `[t-D*86400, t]`, including current, for D=7 and D=30.
+Let x be timestamp in days and y=ln(cleanMedian):
+
+```text
+slope_ij = (ln(price_j) - ln(price_i)) / ((t_j-t_i)/86400), i<j
+slope = median(all pairwise slopes)
+trendPctPerDay = 100 * (exp(slope) - 1)
+```
+
+At least five distinct-time valid snapshots and at least 86400 seconds between
+first and last are required. 30d trend additionally requires 30-day history age.
+The 7d trend can be available during EARLY: it explicitly uses **available points
+within the last 7 days**, with the five-point/24h guard, not an invented full week.
+Full 7d median/change/supply still require seven-day age. Nonfinite output is
+UNKNOWN. At the 200-observation cap there are at most 19,900 slopes per window.
+A single odd snapshot usually cannot dominate their median; robustness is not an
+unconditional guarantee against multiple bad observations.
+
+This is the median-pairwise-slope Theil-Sen estimator, with no fitted-price prediction
+or confidence interval. [SciPy method reference](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.theilslopes.html).
+
+## 11. Robust return volatility
+
+Use chronological valid observations within the 7d window, including current.
+Require at least five observations spanning at least 24h, as for trend.
+
+```text
+r_i = ln(price_i) - ln(price_(i-1))
+MAD(r) = median(abs(r_i - median(r)))
+sigma = 1.4826 * MAD(r)
+volatilityPct = 100 * (exp(sigma) - 1)
+```
+
+This is robust dispersion **per observation interval**, not annualized/daily
+volatility; irregular scan cadence matters. The 1.4826 scale is the rounded normal
+consistency factor. [MAD reference](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.median_abs_deviation.html).
+
+Relative LOW/NORMAL/HIGH classification describes the **latest unusual return**
+against the same item's preceding returns in that window. With at least four
+returns total, the reference has at least three:
+
+```text
+center = median(preceding returns)
+scale = 1.4826 * MAD(preceding returns)
+zReturn = abs(latest return - center) / scale
+LOW if zReturn <= 1
+NORMAL if 1 < zReturn <= 3
+HIGH if zReturn > 3
+```
+
+If scale<=1e-12 log units: LOW if deviation<=1e-12, otherwise HIGH. This avoids
+infinite scores for flat histories; the numeric score stays absent. Classification
+and dispersion are different facts: a single latest shock can be HIGH while MAD
+volatility is zero. The report calls this 'Unusual return volatility', not a copper
+threshold or a prediction of future volatility.
+
+## 12. Significance
+
+Recent window is `[t-86400, t]`; baseline is `[t-8*86400, t-86400)` (prior seven
+days). They never overlap. Include current in recent. Require recent n>=3 and
+baseline m>=7 valid observations; otherwise return INSUFFICIENT with no p-value,
+significant/practical/meaningful booleans. Invalid prices return UNKNOWN.
+
+Two-sided Mann-Whitney U uses original positive prices; log transformation would
+preserve their ranks. Equal prices receive average pooled ranks. With N=n+m and
+pooled tie-group sizes k:
+
+```text
+U = sum(recent ranks) - n*(n+1)/2
+mu = n*m/2
+variance = n*m/12 * ((N+1) - sum(k^3-k)/(N*(N-1)))
+z = max(0, abs(U-mu)-0.5) / sqrt(variance)
+p = 2 * (1-Phi(z))
+```
+
+Variance zero (all identical) gives p=1. Normal CDF uses the standard five-term
+polynomial tail approximation; two-sided numerical approximation error <1.5e-7.
+This error bound concerns CDF evaluation only, **not** the small-sample accuracy
+of the normal approximation. p is clamped to [0,1]. It is not an exact/permutation
+test. Method tag is `MW_NORMAL_TIE_CONTINUITY`; tie correction and 0.5 continuity
+correction are tested against independent erfc reference values.
+[Method and approximation caveats](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.mannwhitneyu.html).
+
+```text
+practicalChange = 100 * (median(recent) / median(baseline) - 1)
+significant = p < 0.05
+practical = abs(median(recent)-median(baseline)) >= median(baseline)/10
+meaningfulMove = significant AND practical
+```
+
+The difference-based practical comparison includes exactly +/-10% without
+floating cancellation at the percentage boundary. This is a recent-window median
+comparison, distinct from current-vs-7d change. p alone never enters the meaningful
+changes report. UI shows very small values as p<0.0001, not p=0.0000.
+
+Limitations: snapshots are observational and may be serially dependent; a ten-minute
+dedupe is not decorrelation. Changed rapid refreshes still get stored. Unlike old
+future design notes, Issue #7 explicitly uses snapshot windows, not daily aggregates.
+MW assumes independent samples and tests distributions, not only medians unless
+shapes are comparable. Small/tied samples make this normal approximation coarse.
+No multiple-item testing correction is applied. Treat p as descriptive approximate
+evidence with count/age guards, not calibrated certainty or causal manipulation proof.
+
+## 13. Descriptive signals and reports
+
+| Fact | Exact rule |
+|---|---|
+| CHEAP_VS_HISTORY | Mature 30d percentile <=20 |
+| EXPENSIVE_VS_HISTORY | Mature 30d percentile >=80 |
+| NORMAL_RANGE | Percentile strictly between 20 and 80 |
+| RISING | Available robust 7d trend >+2%/day |
+| FALLING | Available robust 7d trend <-2%/day |
+| STABLE | Trend within inclusive [-2,+2]%/day |
+| LOW_SUPPLY | Current/7d median quantity <=0.6 |
+| HIGH_SUPPLY | Ratio >=1.6 |
+| NORMAL_SUPPLY | Ratio strictly between 0.6 and 1.6 |
+| Volatility LOW/NORMAL/HIGH | Own-return rules in section 11 |
+
+Missing facts propagate UNKNOWN/INSUFFICIENT, never a fabricated NORMAL state.
+The pure signal result includes a short descriptive enum summary. Report includes
+configured items only: RISING sorted by descending trend, CHEAP historical
+position, HIGH unusual returns, and combined meaningfulMove. Failed items are
+omitted from those sections. Maturity summary includes all configured items.
+These labels are observations, never BUY/SELL commands, profitability ranks or
+sale price recommendations.
+
+## 14. Remaining limits
+
+Two or three daily scans are the intended cadence. Fast refreshes can overweight
+short periods despite dedupe, while sparse days limit window coverage. Retention
+can erase the age needed for 30d maturity under very heavy sampling. An insufficient
+current-scan anomaly model is preserved; historical robustness cannot establish
+that every underlying auction observation was clean. Realm/faction sharing,
+full-result completeness and MP-05 client persistence remain beta checks.
+Historical metrics are cached as of each item's last scan; UI age changes only on
+UI/events, with no timer or OnUpdate. The optional 7d sparkline is deferred.
