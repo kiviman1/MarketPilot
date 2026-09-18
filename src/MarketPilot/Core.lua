@@ -5,6 +5,85 @@ local function debug(message)
 end
 
 local panel, market, batch
+local function computedMarketKey()
+    local realmOK, realm = false, nil
+    local factionOK, faction = false, nil
+    if type(GetRealmName) == "function" then realmOK, realm = pcall(GetRealmName) end
+    if type(UnitFactionGroup) == "function" then factionOK, faction = pcall(UnitFactionGroup, "player") end
+    if realmOK and factionOK and type(realm) == "string" and realm ~= "" and type(faction) == "string" and faction ~= "" then
+        return "forever-beta:v1:" .. #realm .. ":" .. realm .. ":" .. #faction .. ":" .. faction
+    end
+end
+
+-- Diagnostics retain detached text only, once per startup phase. No saved log or
+-- raw AH rows; rawget/next avoid invoking callbacks on a malformed global.
+local startupObservations, observedPhases = {}, {}
+local function primitive(value)
+    local kind = type(value)
+    if kind == "string" then return (value:gsub("[\r\n]", " ")) end
+    if kind == "number" or kind == "boolean" or kind == "nil" then return tostring(value) end
+    return "<" .. kind .. ">"
+end
+local function field(value, key)
+    if type(value) == "table" then return rawget(value, key) end
+end
+local function marketCounts(value)
+    local items = field(value, "items")
+    if type(items) ~= "table" then return "UNKNOWN", "UNKNOWN" end
+    local itemCount, snapshotCount, complete = 0, 0, true
+    for _, item in next, items do
+        itemCount = itemCount + 1
+        local snapshots = field(item, "snapshots")
+        if type(snapshots) == "table" then
+            for _ in next, snapshots do snapshotCount = snapshotCount + 1 end
+        else complete = false end
+    end
+    return itemCount, complete and snapshotCount or "UNKNOWN"
+end
+local function savedVariablesSnapshot(phase)
+    local root, db = MarketPilotDB, market and market.db
+    local markets, rows = field(root, "markets"), {}
+    if type(markets) == "table" then
+        for key, value in next, markets do
+            local items, snapshots = marketCounts(value)
+            rows[#rows + 1] = { key = primitive(key), items = items, snapshots = snapshots }
+        end
+    end
+    table.sort(rows, function(a, b) return a.key < b.key end)
+    local canary = field(root, "_svCanary")
+    local prefix = "svdebug " .. phase
+    local lines = { prefix .. " globalType=" .. type(root) .. " schema=" .. primitive(field(root, "schema"))
+        .. " marketKeys=" .. (type(markets) == "table" and #rows or "UNKNOWN")
+        .. " computedKey=" .. (computedMarketKey() or "UNKNOWN")
+        .. " activeKey=" .. (db and db.status == "OK" and db.key or "UNKNOWN")
+        .. " globalSameRoot=" .. (db and tostring(root == db.root) or "NO_DB")
+        .. " canary=" .. (canary ~= nil and "PRESENT" or "ABSENT") .. " value=" .. primitive(canary) }
+    for _, row in ipairs(rows) do
+        lines[#lines + 1] = prefix .. " marketKey=" .. row.key .. " items=" .. row.items .. " snapshots=" .. row.snapshots
+    end
+    return lines
+end
+local function observeStartup(phase)
+    if observedPhases[phase] then return end
+    startupObservations[#startupObservations + 1] = savedVariablesSnapshot(phase)
+    observedPhases[phase] = true
+end
+observeStartup("CORE_FILE_LOAD") -- Before constructing Market or calling DB.Open.
+
+local function savedVariablesDebug()
+    for _, lines in ipairs(startupObservations) do
+        for _, line in ipairs(lines) do debug(line) end
+    end
+    for _, line in ipairs(savedVariablesSnapshot("CURRENT")) do debug(line) end
+end
+local function markSavedVariables()
+    if type(MarketPilotDB) ~= "table" then debug("svmark: global is not a table; no canary written"); return end
+    local ok, timestamp = pcall(time)
+    if not ok or not MP.HistoryMath.Integer(timestamp, 0) then debug("svmark: clock UNKNOWN; no canary written"); return end
+    rawset(MarketPilotDB, "_svCanary", timestamp)
+    debug("svmark: _svCanary=" .. string.format("%.0f", timestamp) .. "; reload then /mp svdebug")
+end
+
 local function notify(message)
     debug(message)
     if market then market:Record(MP.scanner) end
@@ -21,14 +100,7 @@ local frame = CreateFrame("Frame")
 local startupError
 
 local function initializeHistory()
-    local realmOK, realm = false, nil
-    local factionOK, faction = false, nil
-    if type(GetRealmName) == "function" then realmOK, realm = pcall(GetRealmName) end
-    if type(UnitFactionGroup) == "function" then factionOK, faction = pcall(UnitFactionGroup, "player") end
-    local key
-    if realmOK and factionOK and type(realm) == "string" and realm ~= "" and type(faction) == "string" and faction ~= "" then
-        key = "forever-beta:v1:" .. #realm .. ":" .. realm .. ":" .. #faction .. ":" .. faction
-    end
+    local key = computedMarketKey()
     -- An early valid identity is provisional: only the same key/root may reuse
     -- the binding. Rebinding must not prune or replace existing history.
     local sameRoot = market.db.root == MarketPilotDB
@@ -46,6 +118,7 @@ local function databaseStatus()
         return MP.HistoryMath.Integer(value, 0) and string.format("%.0f", value) or "UNKNOWN"
     end
     debug("db status=" .. db.status .. " activeKey=" .. (db.status == "OK" and db.key or "UNKNOWN")
+        .. " globalSameRoot=" .. tostring(MarketPilotDB == db.root)
         .. (db.error and " error=" .. db.error or ""))
     for _, itemID in ipairs(MP.Items.List()) do
         local history = db:History(itemID)
@@ -66,12 +139,18 @@ local function onEvent(event, itemID, success)
     -- Revalidate even a successful early binding against stable player identity.
     -- Watch/dbstatus themselves never initialize or write history.
     if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
+        observeStartup(event .. " pre-bind")
         initializeHistory()
+        observeStartup(event .. " post-bind")
         if panel.anchor then panel:Guard(panel.Update) end
         return
     end
     if event == "ADDON_LOADED" then
-        if itemID == "MarketPilot" then initializeHistory() end
+        if itemID == "MarketPilot" then
+            observeStartup("ADDON_LOADED pre-bind")
+            initializeHistory()
+            observeStartup("ADDON_LOADED post-bind")
+        end
         if scanner.ahOpen and (not panel.anchor or panel.mode ~= "AH") then panel:Open() end
         return
     end
@@ -121,8 +200,10 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "report" then panel:Guard(panel.ToggleReport)
         elseif command == "watch" then panel:Guard(panel.ToggleWatch)
         elseif command == "dbstatus" then databaseStatus()
+        elseif command == "svdebug" then savedVariablesDebug()
+        elseif command == "svmark" then markSavedVariables()
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp batch | /mp cancel | /mp report | /mp watch") end
+        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end

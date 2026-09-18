@@ -31,7 +31,7 @@ the automatic AH panel; explicitly requested watch returns to standalone.
 Reopen does not resume. A safely failed item is recorded and the batch continues.
 An ambiguous dispatch stops the batch until AH close/reopen.
 
-Debug helpers: `/mp status`, `/mp dbstatus`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
+Debug helpers: `/mp status`, `/mp dbstatus`, `/mp svdebug`, `/mp svmark`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
 
 ## Stored Market Watch anywhere
@@ -61,10 +61,51 @@ Same-realm/same-faction characters read the
 same account-wide partition. Database schema, key and retention rules are unchanged.
 
 For a missing `Now` value after reload, use `/mp dbstatus`: it prints DB status,
-active market key, and each configured item's snapshot count, latest timestamp and
+active market key, `globalSameRoot`, and each configured item's snapshot count, latest timestamp and
 latest cleanMedian (integer copper, or UNKNOWN). It reads persisted data directly
 and does not scan, bind, prune, or add information to the normal panel. Early-key
 partitions remain preserved rather than being guessed to belong to another market.
+
+## Persistence diagnostics (no new persistence fix)
+
+The latest real-client report reproduced lost visible snapshots after a full
+client exit/relaunch, then scan/reload, with an unchanged active key. TOC metadata
+caching is not a supported explanation for that reproduction. The cause remains
+UNKNOWN; these diagnostics distinguish loaded-global state from a detached binding.
+
+`/mp svdebug` prints observations from Core file load (before any DB.Open), and
+pre/post bind for ADDON_LOADED, PLAYER_LOGIN and PLAYER_ENTERING_WORLD. It retains
+the first occurrence of each of those seven phases for this session as detached
+text, then adds a fresh CURRENT observation on each command. It does not persist
+the diagnostic log. Each phase/current report includes global type/schema, market
+key count, computed key, active key, global/root equality, canary presence/value,
+and every global market key's total item/snapshot counts, including unconfigured
+items. Counts are raw container-entry counts; malformed/missing containers show
+UNKNOWN. At Core file load equality is NO_DB because Market has not been created.
+
+`globalSameRoot=false` means the actual saved global differs from the bound DB
+root. `/mp dbstatus` reads bound history; `/mp svdebug` reads the raw global and
+does not repair a mismatch. Neither diagnostic command binds, prunes, scans,
+changes history or updates the normal dashboard.
+
+`/mp svmark` explicitly writes only `MarketPilotDB._svCanary = time()` as an integer
+primitive. It does not create a missing root or change schema, keys or snapshots.
+No second SavedVariables name is added. The canary is excluded from market/history
+math and changes only when this command is invoked again. It is a serialization
+marker, not evidence that serialization succeeded until checked after reload.
+
+Diagnostic sequence in the real client:
+
+1. `/mp svmark`.
+2. Run the normal batch at AH.
+3. Capture `/mp dbstatus` and `/mp svdebug` output.
+4. `/reload`.
+5. Before opening/interacting with AH or scanning, capture `/mp svdebug` and
+   `/mp dbstatus` again. Compare canary, phase counts and root equality.
+
+All current binding, pruning and scanning behavior is unchanged by this diagnostic
+follow-up. A nil global at Core load alone is not a diagnosis; compare later
+pre-bind observations before deciding whether data was loaded or replaced.
 
 ## Implementation and persistence
 

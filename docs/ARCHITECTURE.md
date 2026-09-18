@@ -145,10 +145,28 @@ login/reload. Core revalidates realm/faction at PLAYER_LOGIN and PLAYER_ENTERING
 the watch command itself does not initialize the DB or run retention. Partition,
 schema and retention are unchanged.
 
-`/mp dbstatus` is a read-only debug command: DB status/active key, then configured
+`/mp dbstatus` is a read-only debug command: DB status/active key/globalSameRoot, then configured
 item ID, stored snapshot count, latest timestamp and latest cleanMedian in copper.
 It reads Database:History directly rather than Market's session cache/overlays.
 No identity binding, retention, scan or normal UI change is triggered by the command.
+
+Core's diagnostic-only startup observations capture the raw global before any
+Market construction/DB.Open and before/after the existing ADDON_LOADED, PLAYER_LOGIN
+and PLAYER_ENTERING_WORLD binds. The first occurrence of each phase is kept as
+detached text in session memory (seven phases maximum, no raw rows or saved log).
+The existing key calculation is shared unchanged between binding and observation.
+
+`/mp svdebug` prints those observations plus CURRENT: global type/schema, computed
+and active keys, global/root equality, canary presence/value, and raw item/snapshot
+entry counts for every global market key, including unconfigured items. It does
+not call Database.Open/History/Prune/Append, Scanner, Market analytics or UI.
+Raw inspection uses rawget/next and primitive formatting so malformed tables do
+not invoke their callbacks; absent/malformed containers remain UNKNOWN.
+
+Only `/mp svmark` writes the diagnostic `_svCanary=time()` primitive directly on
+the existing global table. It never creates a root or alters schema/history; no
+second SavedVariables variable is declared. This field is outside `markets` and
+is not part of any history calculation. Binding/retention behavior is unchanged.
 
 Watchlist: last observed clean median, 7d change, trend arrow, 30d percentile,
 supply and maturity. Selecting during batch changes detail without another query.

@@ -772,4 +772,169 @@ test("unknown schema stays intact through stable revalidation and dbstatus", fun
     same(root, before); assert(f.ahCalls == 0)
 end)
 
+local function svdebug(f)
+    local start = #f.output
+    f.env.SlashCmdList.MARKETPILOT("svdebug")
+    local lines = {}; for i = start + 1, #f.output do lines[#lines + 1] = f.output[i] end
+    return lines
+end
+local function observation(lines, phase, field)
+    local prefix = "svdebug " .. phase .. " " .. (field or "globalType=")
+    for _, line in ipairs(lines) do if line:find(prefix, 1, true) then return line end end
+    error("missing observation: " .. prefix)
+end
+
+test("SV phases capture already-loaded history before binding and preserve both markets", function()
+    local f = watchFixture(function(f)
+        f.env.MarketPilotDB._svCanary = 12345
+        f.env.MarketPilotDB.markets["other-market"] = { items = {
+            [99999] = { snapshots = { snapshot(f.now - 100, 333), snapshot(f.now, 334) } },
+        } }
+    end)
+    local root, before = f.env.MarketPilotDB, clone(f.env.MarketPilotDB)
+    f:event("PLAYER_ENTERING_WORLD")
+    local lines = svdebug(f)
+    local phases = { "CORE_FILE_LOAD", "ADDON_LOADED pre-bind", "ADDON_LOADED post-bind",
+        "PLAYER_LOGIN pre-bind", "PLAYER_LOGIN post-bind", "PLAYER_ENTERING_WORLD pre-bind", "PLAYER_ENTERING_WORLD post-bind" }
+    for i, phase in ipairs(phases) do
+        local header = observation(lines, phase)
+        assert(header:find("globalType=table schema=1 marketKeys=2", 1, true))
+        assert(header:find("computedKey=" .. f.bankKey, 1, true))
+        assert(header:find("canary=PRESENT value=12345", 1, true))
+        assert(header:find("globalSameRoot=" .. (i == 1 and "NO_DB" or (i == 2 and "false" or "true")), 1, true))
+        assert(observation(lines, phase, "marketKey=" .. f.bankKey):find("items=2 snapshots=5", 1, true))
+        assert(observation(lines, phase, "marketKey=other-market"):find("items=1 snapshots=2", 1, true))
+    end
+    assert(#lines == 24) -- Seven startup phases plus CURRENT; each has both keys.
+    assert(f.env.MarketPilotDB == root and f.mp.market.db.root == root and f.ahCalls == 0)
+    same(root, before)
+end)
+
+test("SV diagnostics distinguish a global supplied after Core load from pre-bind state", function()
+    local saved = watchFixture().env.MarketPilotDB
+    local f = fixture() -- At Core file load, the saved global has not been supplied.
+    f.env.MarketPilotDB = clone(saved)
+    local root, before = f.env.MarketPilotDB, clone(f.env.MarketPilotDB)
+    f:event("ADDON_LOADED", "MarketPilot"); f:event("PLAYER_LOGIN")
+    local lines = svdebug(f)
+    assert(observation(lines, "CORE_FILE_LOAD"):find("globalType=nil schema=nil marketKeys=UNKNOWN", 1, true))
+    assert(observation(lines, "ADDON_LOADED pre-bind"):find("globalType=table schema=1 marketKeys=1", 1, true))
+    assert(observation(lines, "ADDON_LOADED pre-bind"):find("globalSameRoot=false", 1, true))
+    assert(observation(lines, "ADDON_LOADED post-bind"):find("globalSameRoot=true", 1, true))
+    assert(f.env.MarketPilotDB == root and #f.sent == 0)
+    same(root, before)
+end)
+
+test("late global replacement is visible while db root stays stale until existing bind runs", function()
+    local f = watchFixture()
+    local oldRoot, oldBefore = f.env.MarketPilotDB, clone(f.env.MarketPilotDB)
+    local replacement = clone(oldRoot)
+    replacement.markets[f.bankKey].items = {}
+    replacement.markets["replacement-market"] = { items = { [99999] = { snapshots = { snapshot(f.now, 44) } } } }
+    replacement._svCanary = 777
+    f.env.MarketPilotDB = replacement
+    local before = clone(replacement)
+    local lines = svdebug(f)
+    assert(observation(lines, "CURRENT"):find("globalSameRoot=false", 1, true))
+    assert(observation(lines, "CURRENT"):find("canary=PRESENT value=777", 1, true))
+    assert(observation(lines, "CURRENT", "marketKey=" .. f.bankKey):find("items=0 snapshots=0", 1, true))
+    assert(observation(lines, "CURRENT", "marketKey=replacement-market"):find("items=1 snapshots=1", 1, true))
+    f.env.SlashCmdList.MARKETPILOT("dbstatus")
+    assert(f:has("activeKey=" .. f.bankKey .. " globalSameRoot=false"))
+    assert(f:has("itemID=2770 snapshots=4")) -- Bound root and actual global are intentionally different.
+    assert(f.mp.market.db.root == oldRoot)
+    f:event("PLAYER_ENTERING_WORLD") -- Existing rebind behavior is observed, not changed by diagnostics.
+    lines = svdebug(f)
+    assert(observation(lines, "PLAYER_ENTERING_WORLD pre-bind"):find("globalSameRoot=false", 1, true))
+    assert(observation(lines, "PLAYER_ENTERING_WORLD post-bind"):find("globalSameRoot=true", 1, true))
+    assert(f.mp.market.db.root == replacement and f.ahCalls == 0)
+    same(oldRoot, oldBefore); same(replacement, before)
+end)
+
+test("startup snapshots are detached and first-phase observations survive repeated world events", function()
+    local f = watchFixture(); f:event("PLAYER_ENTERING_WORLD")
+    local first = svdebug(f)
+    -- A later runtime change must not rewrite the recorded startup counts/canary.
+    f.env.MarketPilotDB.markets[f.bankKey].items[2447].snapshots[2] = snapshot(f.now + 1, 28)
+    f.env.MarketPilotDB._svCanary = 999
+    local before = clone(f.env.MarketPilotDB)
+    f:event("PLAYER_ENTERING_WORLD")
+    local later = svdebug(f)
+    assert(#later == #first)
+    assert(observation(first, "CORE_FILE_LOAD") == observation(later, "CORE_FILE_LOAD"))
+    assert(observation(later, "PLAYER_ENTERING_WORLD pre-bind", "marketKey=" .. f.bankKey):find("snapshots=5", 1, true))
+    assert(observation(later, "CURRENT", "marketKey=" .. f.bankKey):find("snapshots=6", 1, true))
+    assert(observation(later, "CORE_FILE_LOAD"):find("canary=ABSENT", 1, true))
+    assert(observation(later, "CURRENT"):find("canary=PRESENT value=999", 1, true))
+    same(f.env.MarketPilotDB, before)
+end)
+
+test("svdebug is read-only even with stale root and never binds/prunes/scans/renders", function()
+    local f = watchFixture(); f:watch()
+    local market, db, scanner = f.mp.market, f.mp.market.db, f.scanner
+    local cache, oldRoot = market.cache, f.env.MarketPilotDB
+    f.env.MarketPilotDB = clone(oldRoot)
+    local before = clone(f.env.MarketPilotDB)
+    local calls = 0
+    local function forbidden() calls = calls + 1; error("svdebug side effect") end
+    f.mp.Database.Open, db.Prune, db.Append, db.History = forbidden, forbidden, forbidden, forbidden
+    market.Record, market.Get, f.scanner.Start, f.scanner.Fail = forbidden, forbidden, forbidden, forbidden
+    f.panel.Update, f.env.GetItemInfo = forbidden, forbidden
+    local a, b = svdebug(f), svdebug(f)
+    same(a, b)
+    assert(observation(a, "CURRENT"):find("globalSameRoot=false", 1, true))
+    assert(calls == 0 and f.ahCalls == 0 and market.db == db and db.root == oldRoot)
+    assert(market.cache == cache and scanner.state == "IDLE" and f.panel.frame:IsVisible())
+    same(f.env.MarketPilotDB, before); same(oldRoot, before)
+end)
+
+test("svmark changes only the explicit root primitive and never enters history analytics", function()
+    local f = watchFixture(); f:watch()
+    local root, before, market = f.env.MarketPilotDB, clone(f.env.MarketPilotDB), f.mp.market
+    local current, cache = market:Get(2770), market.cache
+    local calls = 0
+    local function forbidden() calls = calls + 1; error("svmark side effect") end
+    f.mp.Database.Open, market.db.Prune, market.db.Append, f.scanner.Start = forbidden, forbidden, forbidden, forbidden
+    f.now = f.now + 10; f.env.SlashCmdList.MARKETPILOT("svmark")
+    assert(type(root._svCanary) == "number" and root._svCanary == f.now and root.schema == 1)
+    before._svCanary = f.now; same(root, before)
+    f.now = f.now + 1; f.env.SlashCmdList.MARKETPILOT("svmark")
+    before._svCanary = f.now; same(root, before)
+    assert(f.env.MarketPilotDB == root and market.cache == cache and market:Get(2770) == current)
+    assert(current.analytics.count == 4 and calls == 0 and f.ahCalls == 0)
+    local lines = svdebug(f)
+    assert(observation(lines, "CURRENT"):find("canary=PRESENT value=4000011", 1, true))
+    assert(observation(lines, "CORE_FILE_LOAD"):find("canary=ABSENT", 1, true))
+    local reloaded = watchFixture(function(g) g.env.MarketPilotDB = clone(root) end)
+    assert(observation(svdebug(reloaded), "CORE_FILE_LOAD"):find("canary=PRESENT value=4000011", 1, true))
+    same(reloaded.env.MarketPilotDB, before)
+end)
+
+test("svmark never creates a missing root and rejects an invalid clock without mutation", function()
+    local f = fixture()
+    f.env.SlashCmdList.MARKETPILOT("svmark")
+    assert(f.env.MarketPilotDB == nil and f.scanner.state == "IDLE")
+    f.env.MarketPilotDB = "malformed"; f.env.SlashCmdList.MARKETPILOT("svmark")
+    assert(f.env.MarketPilotDB == "malformed")
+    f.env.MarketPilotDB = { schema = 99, keep = true }
+    f.env.time = function() return 0/0 end
+    f.env.SlashCmdList.MARKETPILOT("svmark")
+    same(f.env.MarketPilotDB, { schema = 99, keep = true })
+    assert(f:has("clock UNKNOWN") and #f.sent == 0)
+end)
+
+test("svdebug tolerates malformed globals and counts raw containers without metamethods", function()
+    local calls = 0
+    local function trap() calls = calls + 1; error("diagnostic invoked root callback") end
+    local root = setmetatable({ schema = setmetatable({}, { __tostring = trap }), markets = {
+        malformed = false, incomplete = { items = { [1] = { snapshots = false } } },
+    } }, { __index = trap, __newindex = trap, __pairs = trap })
+    local f = fixture(function(f) f.env.MarketPilotDB = root end)
+    local lines = svdebug(f)
+    assert(observation(lines, "CURRENT"):find("globalType=table schema=<table> marketKeys=2", 1, true))
+    assert(observation(lines, "CURRENT", "marketKey=malformed"):find("items=UNKNOWN snapshots=UNKNOWN", 1, true))
+    assert(observation(lines, "CURRENT", "marketKey=incomplete"):find("items=1 snapshots=UNKNOWN", 1, true))
+    assert(calls == 0 and f.env.MarketPilotDB == root and f.scanner.state == "IDLE")
+end)
+
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

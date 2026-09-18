@@ -214,6 +214,33 @@ the existing root to the current key, invalidates partition-local cached values,
 and leaves saved history intact. `/mp dbstatus` now exposes the active key and
 stored count/latest timestamp/latest cleanMedian for each configured item.
 
-Actual corrected behavior after bank-alt reload and same-realm/faction main login
-remains UNKNOWN until the user repeats those steps in Forever beta. No new client
-API signature or cross-market sharing rule is inferred from the offline fixture.
+The later diagnostic report below confirms that the reload symptom still occurs.
+No new client API signature or cross-market sharing rule is inferred from the
+offline key-change fixture.
+
+## MP-05 persistence diagnostic report — unresolved live failure
+
+Source: [Issue #7 correction, 2026-09-18](https://github.com/kiviman1/MarketPilot/issues/7#issuecomment-5727768062).
+The user explicitly performed the reproduction after a **full WoW beta client
+exit/relaunch** with the current addon. TOC metadata caching does not explain this
+reported run.
+
+Reported facts:
+
+- Active key before scan, after scan and after reload was unchanged:
+  `forever-beta:v1:18:Classic Beta PvE2:5:Horde` (verbatim reported key).
+- Before scan: snapshots=0.
+- After batch: snapshots=1 for all five configured IDs; Silver's cleanMedian was
+  UNKNOWN even though its snapshot existed.
+- After `/reload`: snapshots=0 again.
+
+Cause is UNKNOWN. These counts alone do not distinguish failure to serialize/load
+the saved global from runtime replacement/detachment of that root. The earlier
+synthetic A-to-B key fix does not establish the cause of this unchanged-key failure.
+
+This follow-up adds diagnostics only: frozen Core/startup pre/post-bind observations,
+read-only `/mp svdebug`, globalSameRoot in `/mp dbstatus`, and an explicit primitive
+canary through `/mp svmark`. No further binding/retention fix, schema change, second
+SavedVariables name, or guessed migration is introduced. The canary's real reload
+survival and actual phase/global/root observations remain UNKNOWN until the user
+returns the command output; the diagnostic sequence is in [src/README.md](../src/README.md).
