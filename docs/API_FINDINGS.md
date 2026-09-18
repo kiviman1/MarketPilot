@@ -10,10 +10,11 @@ version/build/interface and test timestamp were not supplied.
 ## Client
 
 ```text
-Version: UNKNOWN
-Build: UNKNOWN
-Interface: UNKNOWN
-Observed on: UNKNOWN
+Version: 1.60.1
+Build: 69893
+Interface: 16001
+Build date: Sep 16 2026
+Observed on: 2026-09-18
 ```
 
 ## Auction House open/close
@@ -89,8 +90,8 @@ Rejected/queued premature query behavior: UNKNOWN
 
 ```text
 Survives /reload: CONFIRMED — user manually verified retained MarketPilotProbe data in the beta client
-Survives normal logout: EXPECTED/UNVERIFIED — deferred; not an MP-01 blocker
-Visible after character switch: EXPECTED/UNVERIFIED — deferred; not an MP-01 blocker
+Survives normal logout: CONFIRMED — user logged out normally after a successful probe observation
+Visible after character switch: CONFIRMED — the same account-wide probe observation was visible on a different character
 ```
 
 ## Confirmed deviations from candidate APIs
@@ -101,19 +102,15 @@ candidate list. Exact error text and numeric build were not supplied; no verbati
 error is reconstructed here. `AUCTION_HOUSE_THROTTLED_SYSTEM_READY` remains the
 observed ready event. No alternative function signatures were needed or inferred.
 
-## Remaining important MP-00 validations
+## MP-00 persistence status
 
-`/reload` persistence is now CONFIRMED by the user's real beta test. Normal logout
-and character-switch persistence remains EXPECTED/UNVERIFIED and deferred. It is
-explicitly **not an MP-01 blocker**; the user authorized the small production
-AuctionAPI/single-item Scanner slice in Issue #2. This does not confirm future
-production persistence: MP-01 has no SavedVariables.
+Probe SavedVariables persistence is CONFIRMED across both `/reload` and a normal
+logout followed by login on a different character. The preserved observation still
+contained the prior Copper Ore sample and client metadata without rescanning.
 
-For the deferred check, query on the AH alt, log out normally, log into the main
-character and run `/mpprobe dump`. Confirm the saved item, timestamp, build and
-samples survive without rescanning. Do not run `/mpprobe clear` between checks.
-Offline fixtures do not substitute for this test. Other UNKNOWN entries above
-remain unverified, including the missing build metadata and `auctionID` semantics.
+This confirmation applies to the probe's account-wide SavedVariables only.
+MP-01 itself has no production persistence layer yet. Other UNKNOWN entries above
+remain unverified, including `auctionID` semantics and result completeness/paging.
 
 ## Raw notes
 
@@ -121,6 +118,15 @@ remain unverified, including the missing build metadata and `auctionID` semantic
 throttle observations recorded above in the real Forever beta client. Actual test
 timestamp is UNKNOWN. Raw chat logs/screenshots were not included in this update.
 
-2026-09-18 (MP-01 follow-up received): user additionally confirmed probe
-SavedVariables survive `/reload` in the real beta client. Normal logout and
-switching to another character were not tested and remain deferred/unverified.
+2026-09-18 (MP-01 follow-up received): user confirmed probe SavedVariables survive
+`/reload`, normal logout, and subsequent login on a different character. The
+preserved sample still showed itemID 2770, quantity 285, unitPrice 200, build 69893,
+interface 16001 and version 1.60.1.
+
+2026-09-18 (MP-01 production validation): the production scanner completed two
+separate manual Copper Ore scans in the live Forever beta client. Each scan sent
+exactly one query and reached DONE. One observed snapshot contained 2 price levels,
+total quantity 472, lowest unit price 199 copper and highest unit price 200 copper.
+The live AH UI at the same moment matched those values. Closing the AH reset the
+scanner to IDLE; reopening and scanning again incremented the session query count
+by exactly one.
