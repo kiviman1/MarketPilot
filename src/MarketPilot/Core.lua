@@ -4,15 +4,16 @@ local function debug(message)
     print("|cff66ccffMarketPilot:|r " .. message:gsub("|", "||"))
 end
 
-local panel
+local panel, sale
 local function notify(message)
     debug(message)
+    if sale then sale:OnScannerChanged() end
     if panel then panel:Guard(panel.Update) end
 end
 local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, notify, time)
 MP.scanner = scanner
 local inventory = MP.Inventory.New(MP.Items)
-local sale = MP.SaleAssistant.New(inventory, scanner, MP.AuctionAPI, MP.Pricing, debug)
+sale = MP.SaleAssistant.New(inventory, scanner, MP.AuctionAPI, MP.Pricing, debug, time)
 MP.inventory, MP.sale = inventory, sale
 panel = MP.UI.New(scanner, MP.Items, debug, sale)
 MP.panel = panel

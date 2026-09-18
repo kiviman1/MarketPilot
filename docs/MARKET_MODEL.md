@@ -266,3 +266,13 @@ so Normal/Patient can legitimately reflect them even though Fast excludes them;
 the targets are not forced into ascending order. These are current-scan reference
 levels, not guarantees of sale speed. No history, p-value, demand model or posting
 semantics are inferred. The future notes above remain unimplemented.
+
+## 14. MP-04B plan amounts
+
+The user chooses FAST, NORMAL or PATIENT; SalePlan consumes that exact existing
+Pricing output. The sufficient-model guard remains mandatory. No Custom price,
+new target formula, undercut or silver rounding is added. `unitPrice` and
+`quantity` are positive exact integers up to 9007199254740991. To compute total
+listed value, reject `unitPrice > floor(9007199254740991 / quantity)` first, then
+multiply. Overflow yields UNKNOWN and no prepared plan. Listed value is a gross
+arithmetic total, not proceeds after fees, a deposit or a promise of sale.

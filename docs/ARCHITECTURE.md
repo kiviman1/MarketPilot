@@ -74,9 +74,20 @@ through Scanner and consumes the stored sample/analysis; it never calls the AH
 API or recalculates statistics. `UIViewModel.lua` maps scanner state to display
 fields and formats integer copper, separately from native frame creation.
 
+### SalePlan.lua (MP-04B)
+Pure validation and immutable primitive snapshots. SaleAssistant owns plan
+lifecycle; a separate Posting module is unnecessary in this dry-run task.
+Plans expose exactly itemID, quantity, durationHours, unitPrice, targetKind and
+createdAt. The backing primitive table is private behind a read-only facade;
+ordinary field assignment errors. `SalePlan.Copy(plan)` returns a detached table
+for enumeration, because Lua 5.1 pairs() does not traverse a facade. Neither the
+plan nor its copies contain ItemLocation, bag addresses or mutable analysis data.
+Nothing is persisted. This is module encapsulation, not a security boundary against
+another addon deliberately using rawset/debug facilities.
+
 ## Dependency direction
 
-Implemented through MP-04 foundation:
+Implemented through MP-04B dry-run confirmation:
 
 ```text
 Core -> Scanner -> AuctionAPI
@@ -84,6 +95,7 @@ Core -> Scanner -> AuctionAPI
      -> SaleAssistant -> Inventory
                       -> Scanner (request / existing analysis)
                       -> Pricing
+                      -> SalePlan (pure validation / immutable snapshot)
                       -> AuctionAPI (read-only candidate sell probe)
      -> UI -> Scanner (manual item/refresh requests)
            -> SaleUI -> SaleAssistant
@@ -121,8 +133,67 @@ false booleans are preserved. Post is permanently disabled with no click handler
 External source references (not evidence of Forever compatibility):
 [Blizzard AH frame source mirror](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseFrame.xml)
 and [client item API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ItemDocumentation.lua).
-MP-03 layout/browsing was user-validated; new MP-04 bag/sell/scroll behavior still
-requires client validation. Candidate API references/status are in API_FINDINGS.
+MP-03 browsing and the reported MP-04 bag/count/price/capability checks are
+user-validated. MP-04B confirmation and invalidation still need client validation.
+The precise evidence limits are in API_FINDINGS.
+
+## Prepared sale lifecycle (MP-04B)
+
+1. Select a bag item; complete/reuse its same-item scan.
+2. Choose quantity, duration and explicitly Fast/Normal/Patient. No Custom target
+   is implemented. Insufficient targets are disabled; selection never auto-switches.
+3. Check sell API for that item/quantity/duration and current bag generation.
+4. Prepare Sale validates AH open, matching DONE sample/analysis, no active request,
+   sufficient pricing, exact positive copper, ownership, 12/24/48 hours, fresh
+   observed sell-valid=true and copper=true, and posting API PRESENT.
+5. Prepare compares a fresh bag read against the snapshot (including configured
+   slots, counts and observed lock/bound flags) to catch a delayed bag event. It
+   makes no AH calls, copies the chosen Pricing output and records injected time.
+6. The confirmation replaces the lower editor. It shows frozen item, quantity,
+   duration, each/total value, target and passed capability gates, plus an explicit
+   no-auction-created statement. Cancel discards it; Live Post Test stays disabled
+   with no OnClick handler. Panel height remains 650, with internal scrolling.
+
+Bag events/refresh, sale item selection, changed quantity/duration/target, scan
+start/refresh, AH close and every new sell capability check invalidate the plan.
+Cancel also invalidates it. Invalid plans never rearm on scan completion or ready
+events. Setting an unchanged value is not a change. Selection refreshes bag data
+conservatively even when reselecting the same item. New scans emit a notification
+before query dispatch so Core invalidates immediately, including WAITING/errors.
+Core connects notifications to SaleAssistant; Scanner has no reverse dependency.
+
+Confirmation text is built once per immutable plan, not from later input widgets.
+The future consumer must use SaleAssistant's current plan, never a detached old
+copy. Quantities/prices and their product must fit 1..9007199254740991; reject
+`unitPrice > floor(MAX_INTEGER / quantity)` before multiplying. No rounding,
+undercut, zero substitution, statistical recomputation or deposit assumption.
+
+## Future hardware-click seam (design only; not implemented)
+
+The only intended future call boundary is:
+
+```lua
+AuctionAPI:PostCommodityExplicit(itemLocation, durationIndex, quantity, unitPrice)
+```
+
+This method is deliberately absent from production. A subsequent explicitly
+authorized live-test task must own a single MarketPilot button's real hardware
+click handler. That handler must revalidate the current plan, inventory/location,
+ownership, capabilities and scan state immediately before one AuctionAPI call.
+ItemLocation is reconstructed at that moment; duration mapping and the exact
+candidate signature must be reviewed from available evidence, not guessed or
+retried. Presence/successful validation alone does not establish posting support.
+No event, slash command, timer, scanner completion or synthetic button click may
+invoke that future operation. There is no secure proxy or Blizzard child hook.
+
+Future controlled test contract (DO NOT RUN in MP-04B): use one cheap Copper Ore
+if available, quantity 1, 12h, and an explicitly user-selected observed target
+(likely Fast/valid market level). Show the final confirmation before the single
+hardware click. Inspect the actual returned result and success/failure events;
+their Forever behavior is UNKNOWN. Preserve the original error/blocked result and
+stop. No automatic retry and no alternate signature fallback. Observe actual
+non-zero-copper acceptance; do not silently round to silver. This branch cannot
+perform this test and does not begin the subsequent task.
 
 The broader graph below remains a future plan; production still has no Database:
 

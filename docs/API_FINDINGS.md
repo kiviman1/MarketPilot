@@ -157,27 +157,31 @@ layout, not every resolution/UI scale or the new MP-04 controls.
 Sub-silver commodity listing prices (20 copper Peacebloom) were also reported.
 This is display/search evidence only, not proof of copper-valued posting support.
 
-## MP-04 sell-side and inventory — UNKNOWN / awaiting beta validation
+## MP-04 sell-side and inventory — reported beta observations
 
-No MP-04 client observation has been supplied. Offline fixtures do not change any
-of the statuses below. Runtime `PRESENT` means only that a function exists;
+User report received with MP-04B: bag selection works, Copper Ore x2 is detected
+correctly, and Current/Fast/Normal/Patient display correct exact copper values.
+The read-only checks returned the observations below. No auction was posted and
+PostCommodity was never called. No new client test was run by the coding agent.
+Runtime `PRESENT` means only that a function exists;
 `CANDIDATE_OBSERVED` means the explicit read-only candidate call returned the
 expected primitive type. Neither label claims its semantics are beta-confirmed.
 
 | Candidate | Read-only probe shape | Forever status |
 |---|---|---|
-| `IsSellItemValid` | `(ItemLocation, false)`; boolean result | UNKNOWN |
-| `CalculateCommodityDeposit` | `(itemID, durationIndex, quantity)`; non-negative integer candidate deposit | UNKNOWN |
-| `SupportsCopperValues` | `()`; boolean result, including false | UNKNOWN |
-| `ShouldAutoPopulatePrice` | `()`; boolean result, including false | UNKNOWN |
-| `PostCommodity` | Presence check only; NEVER CALLED | UNKNOWN |
+| `IsSellItemValid` | `(ItemLocation, false)`; boolean result | CONFIRMED present and returned true in MP-04 check |
+| `CalculateCommodityDeposit` | `(itemID, durationIndex, quantity)` | CONFIRMED present and returned 0 for Copper Ore x2 at all three duration choices |
+| `SupportsCopperValues` | `()` | CONFIRMED present and returned true |
+| `ShouldAutoPopulatePrice` | `()` | CONFIRMED present and returned true |
+| `PostCommodity` | Presence check only; NEVER CALLED | CONFIRMED present; invocation behavior UNKNOWN |
 
-These candidate shapes are external references, not signature guesses or Forever
-findings: [Blizzard API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/AuctionHouseDocumentation.lua).
+These shapes originally came from external references; the limited observations
+above do not establish general sell semantics: [Blizzard API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/AuctionHouseDocumentation.lua).
 The [external sell UI](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseSellFrame.lua)
 uses duration indices. The probe tests candidate mapping 12h/24h/48h to 1/2/3 and
-logs both; the mapping, deposit unit/amount and return semantics still require
-comparison in Forever. No alternate signatures are attempted on failure.
+logs both. Identical 0c returns for Copper Ore x2 at 12h, 24h and 48h do NOT validate
+that mapping or deposit scaling. Duration-index semantics, non-zero deposits,
+minimum deposits and scaling remain UNKNOWN. No fallback signatures are attempted.
 
 The bag boundary uses the documented namespaced readers and primitive itemID /
 stackCount fields: [container declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ContainerDocumentation.lua).
@@ -186,8 +190,9 @@ reagent bag when exposed by NUM_TOTAL_EQUIPPED_BAG_SLOTS; otherwise NUM_BAG_SLOT
 See [external bag constants](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua).
 The candidate [ItemLocation constructor](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_ObjectAPI/Mainline/ItemLocation.lua)
 is called only for the explicit check, after rereading bags and verifying the slot.
-Bag readers, their shapes, equipped-bag coverage, `BAG_UPDATE_DELAYED`, ItemLocation
-acceptance and the new scrolling/edit controls remain UNKNOWN in Forever.
+The tested Copper Ore bag selection/count and ItemLocation sell check work.
+Full equipped-bag coverage, every bag-change edge case and all scrolling/edit
+interactions were not individually reported and remain unverified.
 
 Use **Check sell API (no post)** or `/mp sellstatus` with AH open and a bag item
 selected. The command reports each presence/status/value, attempted argument
@@ -202,3 +207,18 @@ semantics are UNKNOWN. A true SupportsCopperValues result alone cannot confirm a
 real post. No runtime result enables posting; that requires a subsequent scoped
 task after user-provided beta evidence. `auctionID` semantics remain UNKNOWN and
 production code never reads it. No production SavedVariables/schema changes.
+
+## MP-04B dry-run boundary — implemented offline; client validation pending
+
+Prepared plans use the current session's positive read-only observations, not
+hard-coded success from the report above. Evidence must match item, quantity,
+duration and inventory generation. Prepare rechecks the bag snapshot without
+calling sell APIs. Any changed configured slot/count/lock/bound flag rejects it;
+bag events invalidate it regardless of which item changed.
+
+Fast/Normal/Patient selection, immutable plan confirmation and invalidation are
+offline-tested only. The visible Live Post Test button is disabled and has no
+OnClick handler. No real call, synthetic click, posting event handler or retry
+exists. Hardware restrictions, actual copper-valued post acceptance and success/
+failure events remain UNKNOWN. The future hardware-click seam and one-item test
+contract are documented in ARCHITECTURE.md; that test is not part of MP-04B.

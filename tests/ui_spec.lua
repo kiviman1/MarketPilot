@@ -130,9 +130,10 @@ test("UI static boundaries and presentation-only money conversion", function()
     for _, path in ipairs({ "UI.lua", "UIViewModel.lua", "SaleUI.lua" }) do
         local source = read(ROOT .. path)
         for _, forbidden in ipairs({ "C_AuctionHouse", "Statistics.Analyze", "math.log", "OnUpdate", "HookScript", "hooksecurefunc",
-            "SavedVariables", "PostItem", "PostCommodity", "auctionID", "C_Container", "SetAuction" }) do
+            "SavedVariables", "PostItem", "auctionID", "C_Container", "SetAuction" }) do
             assert(not source:find(forbidden, 1, true), path .. " " .. forbidden)
         end
+        assert(not source:match("PostCommodity%s*%(") and not source:match('call%s*%("PostCommodity"'))
     end
     local f = fixture()
     assert(f.view.Money(1) == "0g 0s 1c")
@@ -459,6 +460,177 @@ test("failed sale scan exposes original error and never fabricates a target", fu
     local view = f.panel.saleUI.view
     assert(view.state == "ERROR" and view.lowest == "UNKNOWN" and view.fast == "INSUFFICIENT")
     assert(view.message:find("unitPrice", 1, true) and f.mp.sale.itemID == 2770)
+end)
+
+local function readySale()
+    local f = fixture()
+    f.bags[0] = { { itemID = 2770, stackCount = 2 }, { itemID = 2447, stackCount = 1 } }
+    f.rows = {}
+    for price = 20, 28 do f.rows[#f.rows + 1] = { unitPrice = price, quantity = 1 } end
+    f:open(); f.panel.saleUI.rows[2770]:Click(); f:complete()
+    f.panel.saleUI.targets.FAST:Click(); f.panel.saleUI.check:Click()
+    return f
+end
+
+test("Prepare freezes the selected target and swaps editor for a no-auction confirmation", function()
+    local f = readySale(); local ui = f.panel.saleUI
+    assert(ui.prepare.enabled and ui.targets.FAST.text == "> FAST")
+    -- Prepare must read existing evidence, never call sell/market APIs again.
+    for name in pairs(f.env.C_AuctionHouse) do
+        f.env.C_AuctionHouse[name] = function() error("unexpected AH invocation during Prepare") end
+    end
+    f.mp.Statistics.Analyze = function() error("no statistical recomputation") end
+    ui.prepare:Click()
+    local plan = f.mp.sale.plan
+    assert(plan and plan.itemID == 2770 and plan.quantity == 2 and plan.unitPrice == 20 and plan.createdAt == 123456)
+    assert(ui.confirmation.shown and not ui.editor.shown and ui.frozenView.total == "0g 0s 40c")
+    assert(ui.summary.text:find("no auction has been created", 1, true))
+    assert(ui.summary.text:find("PostCommodity: PRESENT", 1, true))
+    assert(not ui.post.enabled and ui.post.scripts.OnClick == nil and ui.post.text == "Live Post Test - disabled")
+    assert(#f.sent == 1 and f.posts == 0 and f.panel.frame.height == 650)
+    assert(f.panel.scroll.offset == -ui.sectionTop)
+    local frozen = ui.summary.text
+    ui.quantity:SetText("999") -- Mutable widget text cannot overwrite the confirmation.
+    f.panel:Update()
+    assert(ui.summary.text == frozen and plan.quantity == 2)
+    ui.cancel:Click()
+    assert(f.mp.sale.plan == nil and ui.editor.shown and not ui.confirmation.shown)
+end)
+
+test("target choice is explicit, sufficient-only, and never switches automatically", function()
+    local f = readySale(); local ui = f.panel.saleUI
+    for kind, price in pairs({ FAST = 20, NORMAL = 24, PATIENT = 26 }) do
+        ui.targets[kind]:Click(); ui.prepare:Click()
+        assert(f.mp.sale.plan.unitPrice == price and f.mp.sale.plan.targetKind == kind)
+        ui.cancel:Click()
+    end
+    f.rows = { { unitPrice = 20, quantity = 2 } }
+    f.panel.scan:Click(); f:complete()
+    local selected = f.mp.sale.targetKind
+    for _, button in pairs(ui.targets) do assert(not button.enabled) end
+    ui.targets.FAST:Click(true); ui.prepare:Click(true)
+    assert(f.mp.sale.targetKind == selected and f.mp.sale.plan == nil and not ui.prepare.enabled)
+    assert(f.posts == 0)
+end)
+
+test("every required change invalidates immediately and never rearms by itself", function()
+    local changes = {
+        bag = function(f) f:event("BAG_UPDATE_DELAYED") end,
+        scan = function(f) f.panel.scan:Click() end,
+        slashScan = function(f) f.env.SlashCmdList.MARKETPILOT("scan") end,
+        item = function(f) f.mp.sale:Select(2447) end,
+        quantity = function(f) f.mp.sale:SetQuantity(1) end,
+        duration = function(f) f.mp.sale:SetDuration(24) end,
+        target = function(f) f.mp.sale:SetTarget("PATIENT") end,
+        close = function(f) f:event("AUCTION_HOUSE_CLOSED") end,
+        probe = function(f) f.mp.sale:CheckCapabilities() end,
+        slashProbe = function(f) f.env.SlashCmdList.MARKETPILOT("sellstatus") end,
+    }
+    for name, change in pairs(changes) do
+        local f = readySale(); f.panel.saleUI.prepare:Click(); assert(f.mp.sale.plan)
+        change(f)
+        assert(f.mp.sale.plan == nil, name)
+        f.panel:Update()
+        assert(not f.panel.saleUI.confirmation:IsVisible(), name)
+        f:complete(); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+        assert(f.mp.sale.plan == nil and f.posts == 0, name)
+    end
+end)
+
+test("scan invalidates before query dispatch even when throttled or failing", function()
+    for _, mode in ipairs({ "ready", "waiting", "failure" }) do
+        local f = readySale(); f.panel.saleUI.prepare:Click()
+        local original = f.env.C_AuctionHouse.SendSearchQuery
+        f.env.C_AuctionHouse.SendSearchQuery = function(...)
+            assert(f.mp.sale.plan == nil)
+            if mode == "failure" then error("fixture query failure") end
+            return original(...)
+        end
+        f.ready = mode ~= "waiting"
+        f.panel.scan:Click()
+        assert(f.mp.sale.plan == nil and f.posts == 0)
+    end
+end)
+
+test("Prepare requires matching fresh positive runtime capability evidence", function()
+    for _, failure in ipairs({ "valid", "copper", "presence", "missing", "stale", "mismatched" }) do
+        local f = readySale(); local sale = f.mp.sale
+        if failure == "valid" then sale.probe.capabilities[1].value = false
+        elseif failure == "copper" then sale.probe.capabilities[3].value = false
+        elseif failure == "presence" then sale.probe.capabilities[5].presence = "ABSENT"
+        elseif failure == "missing" then sale.probe = nil
+        elseif failure == "stale" then sale.probeContext.generation = -1
+        else sale.probeContext.itemID = 2447 end
+        f.panel:Update(); f.panel.saleUI.prepare:Click(true)
+        assert(sale.plan == nil and not f.panel.saleUI.prepare.enabled and f.posts == 0, failure)
+    end
+end)
+
+test("Prepare detects delayed bag changes including same-total slot changes", function()
+    for _, change in ipairs({ "removed", "moved", "locked", "split" }) do
+        local f = readySale()
+        if change == "removed" then f.bags[0][1] = { itemID = 9999, stackCount = 2 }
+        elseif change == "moved" then f.bags[1] = { f.bags[0][1] }; f.bags[0][1] = { itemID = 9999, stackCount = 2 }
+        elseif change == "locked" then f.bags[0][1].isLocked = true
+        else f.bags[0][1].stackCount = 1; f.bags[1] = { { itemID = 2770, stackCount = 1 } } end
+        f.panel.saleUI.prepare:Click()
+        assert(f.mp.sale.plan == nil and f.mp.sale.probe == nil and f.posts == 0, change)
+    end
+end)
+
+test("synchronous bag event during a capability call cannot certify a newer generation", function()
+    local f = readySale()
+    f.env.C_AuctionHouse.IsSellItemValid = function()
+        f:event("BAG_UPDATE_DELAYED")
+        return true
+    end
+    f.panel.saleUI.check:Click(); f.panel.saleUI.prepare:Click(true)
+    assert(f.mp.sale.plan == nil and not f.panel.saleUI.prepare.enabled and f.posts == 0)
+end)
+
+test("bag event during Prepare revalidation cannot reuse the evidence checked before the read", function()
+    local f = readySale(); local original = f.env.C_Container.GetContainerNumSlots
+    local fired = false
+    f.env.C_Container.GetContainerNumSlots = function(bag)
+        if not fired then fired = true; f:event("BAG_UPDATE_DELAYED") end
+        return original(bag)
+    end
+    f.panel.saleUI.prepare:Click()
+    assert(fired and f.mp.sale.plan == nil and f.mp.sale.probe == nil and f.posts == 0)
+end)
+
+test("Prepare commits visible quantity and requires new evidence after a real change", function()
+    local f = readySale(); local ui = f.panel.saleUI
+    ui.quantity:SetText("1"); ui.quantity.focused = true; ui.prepare:Click()
+    assert(f.mp.sale.quantity == 1 and f.mp.sale.plan == nil and f.mp.sale.probe == nil)
+    ui.check:Click(); ui.prepare:Click()
+    assert(f.mp.sale.plan.quantity == 1 and ui.frozenView.total == "0g 0s 20c")
+end)
+
+test("confirmation formatter consumes the plan rather than live selection or target tables", function()
+    local f = readySale(); f.panel.saleUI.prepare:Click()
+    local plan = f.mp.sale.plan
+    f.mp.sale.quantity, f.mp.sale.duration, f.mp.sale.targetKind = 1, 48, "PATIENT"
+    f.scanner.analysis.clean.weightedMedian = 999
+    local view = f.view.Prepared(plan, { name = "Frozen item" })
+    assert(view.quantity == "2" and view.duration == "12h" and view.target == "FAST")
+    assert(view.price == "0g 0s 20c" and view.total == "0g 0s 40c")
+end)
+
+test("all production modules have no posting invocation, secure proxy, timer or frame loop", function()
+    for _, path in ipairs(files) do
+        local source = read(ROOT .. path)
+        assert(not source:match("PostCommodity%s*%(") and not source:match('call%s*%("PostCommodity"'), path)
+        for _, forbidden in ipairs({ "C_Timer", "OnUpdate", "SecureActionButtonTemplate", "hooksecurefunc", "CommoditiesSellFrame" }) do
+            assert(not source:find(forbidden, 1, true), path .. " " .. forbidden)
+        end
+    end
+    local f = readySale(); f.panel.saleUI.prepare:Click()
+    for _, command in ipairs({ "post", "prepare", "livepost", "Live Post Test", "status" }) do
+        f.env.SlashCmdList.MARKETPILOT(command)
+    end
+    f:event("BAG_UPDATE_DELAYED"); f:complete(); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.posts == 0 and f.panel.saleUI.post.scripts.OnClick == nil)
 end)
 
 print("PASS " .. passed .. " UI offline tests (Lua 5.1); real frame rendering remains unverified")

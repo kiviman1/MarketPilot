@@ -26,7 +26,7 @@ local function fixture()
         PostCommodity = function() f.calls.post = true; error("MUST NEVER BE CALLED") end,
     }
     f.mp = {}
-    for _, name in ipairs({ "Items", "AuctionAPI", "Pricing", "Inventory", "SaleAssistant" }) do
+    for _, name in ipairs({ "Items", "AuctionAPI", "Pricing", "Inventory", "SalePlan", "SaleAssistant" }) do
         setfenv(assert(loadfile(ROOT .. name .. ".lua")), env)("MarketPilot", f.mp)
     end
     f.inventory = f.mp.Inventory.New(f.mp.Items)
@@ -36,7 +36,7 @@ local function fixture()
     function scanner:Start(id) self.starts = self.starts + 1; self.itemID = id; self.state = "QUERYING" end
     f.scanner = scanner
     f.sale = f.mp.SaleAssistant.New(f.inventory, scanner, f.mp.AuctionAPI, f.mp.Pricing,
-        function(message) f.output[#f.output + 1] = message end)
+        function(message) f.output[#f.output + 1] = message end, function() return 123456 end)
     return f
 end
 local passed = 0

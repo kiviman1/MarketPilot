@@ -72,6 +72,7 @@ function Scanner:Start(itemID)
     local available, err = self.api:IsAvailable()
     if not available then self:Fail(err); return end
     self.state = "WAITING"
+    self.notify("scan started; previous sample cleared. " .. self:Summary())
     self:TryQuery()
 end
 

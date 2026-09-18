@@ -1,4 +1,4 @@
-# MarketPilot — MP-04 Sale Assistant foundation (posting disabled)
+# MarketPilot — MP-04B dry-run sale confirmation (posting disabled)
 
 Copy `src/MarketPilot/` into the beta client's `Interface/AddOns/` directory.
 Enable MarketPilot and open AH after login (or close/reopen it after `/reload`).
@@ -15,6 +15,7 @@ Statistics.lua
 Scanner.lua
 Pricing.lua
 Inventory.lua
+SalePlan.lua
 SaleAssistant.lua
 UIViewModel.lua
 SaleUI.lua
@@ -84,6 +85,28 @@ same check. Select a bag item first for validation/deposit, then rerun after cha
 quantity/duration. Deposit is labelled **candidate**; absent/malformed/error results
 stay UNKNOWN. The fifth candidate is presence-only. Post is always disabled and
 has no handler. There is no price filling, secure proxy, bag mutation or real post.
+
+## MP-04B dry-run flow
+
+Select a bag item and wait for DONE. Choose quantity/duration and explicitly click
+FAST, NORMAL or PATIENT (highlighted with `>`). Insufficient targets cannot be
+chosen or prepared. Check sell API after any quantity/duration/bag change, then
+click **Prepare Sale**. Preparation requires same-item sufficient analysis, current
+ownership, positive exact copper and fresh sell-valid=true/copper=true observations
+plus posting API presence. It checks bags again but does not call AH APIs.
+
+The lower editor becomes **Prepared Sale**, containing frozen item, quantity,
+duration, price each, total listed value, target and capability gates. No auction
+has been created. **Cancel** returns to editing. **Live Post Test - disabled** is
+visible with no OnClick handler. No plan is posted, persisted or automatically
+rearmed. There is no posting slash command or callable posting seam yet.
+
+Bag changes, item selection, changed quantity/duration/target, scan/refresh start,
+AH close and a new capability check cancel the plan. New scan completion alone
+cannot restore it. Total listed-value overflow prevents preparation. The pure
+contract is `{ itemID, quantity, durationHours, unitPrice, targetKind, createdAt }`;
+all money remains integer copper. Future hardware-click design is documentation
+only, in `docs/ARCHITECTURE.md`.
 
 `IDLE -> WAITING -> QUERYING -> COLLECTING -> DONE`; errors enter `ERROR`,
 and AH close cancels/resets to `IDLE`. `/mp scan` also scans the selected item.
@@ -161,6 +184,7 @@ lua tests/statistics_spec.lua
 lua tests/ui_spec.lua
 lua tests/pricing_spec.lua
 lua tests/sale_spec.lua
+lua tests/saleplan_spec.lua
 lua probe/tests/probe_spec.lua
 ```
 
@@ -171,7 +195,30 @@ MP-04 adds no persistence. UI tests use mocked native frames, not a game rendere
 The pricing suite runs in a restricted pure-Lua environment; inventory/sale tests
 exercise stale slots, counts, input bounds, API failures and the no-post boundary.
 
-## In-game checklist (MP-04 pending; no posting)
+## In-game checklist (MP-04B pending; no posting)
+
+MP-04 bag selection, Copper Ore x2, exact target display and positive sell/copper
+checks were user-validated. Deposit returned 0 at all durations, so duration/deposit
+scaling and actual posting remain UNKNOWN. The following tests are dry-run only:
+
+1. Open AH, select Copper Ore in bags and finish a scan. Pick quantity 1, 12h and
+   FAST (or NORMAL/PATIENT); verify the selected target is highlighted. If the model
+   is insufficient, preparation must stay unavailable, without inventing a price.
+2. Check sell API, then Prepare. Verify frozen item, quantity, duration, exact price,
+   total, target and capability summary. No-auction-created text must be visible.
+   Live Post Test must be disabled. Compare 20c-style amounts without rounding.
+3. Cancel and repeat for each available target. Try an invalid/excess quantity;
+   it must never create a plan for more than owned. Preparing with an uncommitted
+   changed quantity must demand a fresh capability check.
+4. From a prepared state, trigger a bag change or market Refresh. Confirmation
+   must disappear immediately and never return on scan completion. Repeat with
+   `/mp scan`, `/mp sellstatus`, and AH close/reopen. No auction should appear.
+5. Cancel, change item, quantity, duration or target, then prepare again using
+   current evidence. Check that old confirmation values are never reused.
+6. Check scrolling, collapse/expand and existing market browsing. Return screenshots
+   and errors with build/interface. Do not run a live post test in this task.
+
+## MP-04 regression checklist
 
 1. Copy the entire updated addon directory, reload, then open AH. The panel should
    appear on the right, without covering AH controls or leaving the screen. Confirm

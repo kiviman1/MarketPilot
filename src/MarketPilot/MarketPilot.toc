@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: MarketPilot
-## Notes: MP-04 Sale Assistant foundation for Forever beta; posting disabled
+## Notes: MP-04B dry-run sale confirmation for Forever beta; posting disabled
 ## Author: Kivanc / MarketPilot
-## Version: 0.4.0
+## Version: 0.4.1
 
 Items.lua
 AuctionAPI.lua
@@ -10,6 +10,7 @@ Statistics.lua
 Scanner.lua
 Pricing.lua
 Inventory.lua
+SalePlan.lua
 SaleAssistant.lua
 UIViewModel.lua
 SaleUI.lua

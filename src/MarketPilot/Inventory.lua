@@ -38,7 +38,8 @@ function Inventory:Refresh()
                         local item = found[info.itemID] or { itemID = info.itemID, count = 0, slots = {} }
                         assert(item.count <= 9007199254740991 - info.stackCount, "bag count overflow")
                         item.count = item.count + info.stackCount
-                        item.slots[#item.slots + 1] = { bag = bag, slot = slot, generation = self.generation }
+                        item.slots[#item.slots + 1] = { bag = bag, slot = slot, generation = self.generation,
+                            count = info.stackCount, locked = info.isLocked, bound = info.isBound }
                         found[info.itemID] = item
                     end
                 end
@@ -54,6 +55,25 @@ end
 function Inventory:Owned(itemID)
     if self.status ~= "OK" then return nil end
     return self.items[itemID] and self.items[itemID].count or 0
+end
+
+-- Prepare may follow a delayed bag event. Compare a fresh read without refreshing
+-- the current generation/evidence when the snapshot is genuinely unchanged.
+function Inventory:MatchesSnapshot()
+    local current = Inventory.New(self.configured)
+    current.blockedReason = self.blockedReason
+    if self.status ~= "OK" or not current:Refresh() then return false end
+    for id, item in pairs(self.items) do
+        local fresh = current.items[id]
+        if not fresh or item.count ~= fresh.count or #item.slots ~= #fresh.slots then return false end
+        for index, address in ipairs(item.slots) do
+            local other = fresh.slots[index]
+            if address.bag ~= other.bag or address.slot ~= other.slot or address.count ~= other.count
+                or address.locked ~= other.locked or address.bound ~= other.bound then return false end
+        end
+    end
+    for id in pairs(current.items) do if not self.items[id] then return false end end
+    return true
 end
 
 -- Build a short-lived client object only for the explicit read-only sell probe.

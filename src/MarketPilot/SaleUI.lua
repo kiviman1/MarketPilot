@@ -19,7 +19,15 @@ function SaleUI:Act(method, ...)
 end
 
 function SaleUI.New(parent, sale, items, update, y)
-    local self = setmetatable({ sale = sale, items = items, update = update, rows = {}, values = {}, durations = {} }, SaleUI)
+    local self = setmetatable({ sale = sale, items = items, update = update, rows = {}, values = {}, durations = {}, targets = {} }, SaleUI)
+    self.sectionTop = y
+    self.editor = CreateFrame("Frame", nil, parent)
+    self.editor:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y)
+    self.confirmation = CreateFrame("Frame", nil, parent)
+    self.confirmation:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y)
+    self.confirmation:SetSize(320, 390)
+    self.confirmation:Hide()
+    parent, y = self.editor, 0
     local function button(text, x, top, width, action)
         local value = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
         value:SetPoint("TOPLEFT", parent, "TOPLEFT", x, top)
@@ -54,6 +62,11 @@ function SaleUI.New(parent, sale, items, update, y)
         self.values[field[2]] = label(parent, "UNKNOWN", 121, y, 185)
         y = y - 23
     end
+    for index, kind in ipairs({ "FAST", "NORMAL", "PATIENT" }) do
+        local target = kind
+        self.targets[kind] = button(kind, 14 + (index - 1) * 99, y, 94, function() self:Act(sale.SetTarget, target) end)
+    end
+    y = y - 32
     label(parent, "Quantity", 14, y, 75)
     self.quantity = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
     self.quantity:SetPoint("TOPLEFT", parent, "TOPLEFT", 99, y)
@@ -84,15 +97,36 @@ function SaleUI.New(parent, sale, items, update, y)
     self.capabilities = label(parent, "", 14, y - 34, 292, 140)
     self.message = label(parent, "", 14, y - 176, 292, 46)
     self.check = button("Check sell API (no post)", 14, y - 228, 292, function() self:Act(sale.CheckCapabilities) end)
-    self.post = button("Post - awaiting beta validation", 14, y - 258, 292)
+    self.prepare = button("Prepare Sale", 14, y - 258, 292, function()
+        -- Commit the visible input before freezing; never prepare an older hidden quantity.
+        local valid = sale:SetQuantity(tonumber(self.quantity:GetText()))
+        self.quantity:ClearFocus()
+        if valid then self:Act(sale.Prepare) else self.update() end
+    end)
+    self.editor:SetSize(320, -y + 296)
+    self.bottom = self.sectionTop + y - 296
+    parent = self.confirmation
+    self.summary = label(parent, "", 14, 0, 292, 296)
+    self.cancel = button("Cancel", 14, -300, 292, function() self:Act(sale.Cancel) end)
+    self.post = button("Live Post Test - disabled", 14, -334, 292)
     self.post:Disable() -- Deliberately has no action handler.
-    self.bottom = y - 296
     return self
 end
 
 function SaleUI:Update()
     local view = MP.UIViewModel.Sale(self.sale:State(), self.items)
     self.view = view
+    if view.plan then
+        if self.confirmedPlan ~= view.plan then
+            self.confirmedPlan = view.plan
+            self.frozenView = MP.UIViewModel.Prepared(view.plan, self.items.Metadata(view.plan.itemID))
+        end
+        self.summary:SetText(self.frozenView.text)
+        self.editor:Hide(); self.confirmation:Show()
+    else
+        self.confirmedPlan, self.frozenView = nil, nil
+        self.confirmation:Hide(); self.editor:Show()
+    end
     self.bags:SetText(view.bags)
     for _, row in pairs(self.rows) do row:Hide() end
     for index, item in ipairs(view.rows) do
@@ -108,6 +142,11 @@ function SaleUI:Update()
     for key, value in pairs(self.values) do value:SetText(view[key]) end
     if not self.quantity:HasFocus() then self.quantity:SetText(view.quantity == "UNKNOWN" and "" or view.quantity) end
     for hours, button in pairs(self.durations) do button:SetText((hours == view.duration and "> " or "") .. hours .. "h") end
+    for kind, button in pairs(self.targets) do
+        button:SetText((kind == view.targetKind and "> " or "") .. kind)
+        if view.targetsEnabled[kind] then button:Enable() else button:Disable() end
+    end
+    if view.prepareEnabled then self.prepare:Enable() else self.prepare:Disable() end
     self.capabilities:SetText(view.capabilities)
     self.message:SetText(view.message)
     self.post:Disable()

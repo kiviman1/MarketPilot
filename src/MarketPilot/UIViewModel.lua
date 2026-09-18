@@ -22,7 +22,8 @@ function View.Sale(state, items)
     local view = { rows = {}, enabled = state.enabled, quantity = count(state.quantity), duration = state.duration,
         name = state.itemID and items.Metadata(state.itemID).name or "Select a bag item",
         owned = count(state.owned), state = state.scanState, lowest = View.Money(state.lowest),
-        message = state.message or "Reference targets, not sale guarantees. Posting disabled." }
+        message = state.message or state.prepareReason or "Reference targets, not sale guarantees. Posting disabled.",
+        targetKind = state.targetKind, targetsEnabled = {}, plan = state.plan, prepareEnabled = state.prepareEnabled }
     for _, category in ipairs(items.categories) do
         for _, id in ipairs(category.itemIDs) do
             local item = state.inventory.items[id]
@@ -35,6 +36,7 @@ function View.Sale(state, items)
     for _, key in ipairs({ "fast", "normal", "patient" }) do
         local target = state.targets[key]
         view[key] = target.status == "OK" and View.Money(target.copper) or target.status
+        view.targetsEnabled[key:upper()] = target.status == "OK"
     end
     local capabilities, lines = state.capabilities, {}
     for _, row in ipairs(capabilities.capabilities) do
@@ -47,6 +49,17 @@ function View.Sale(state, items)
     view.bags = state.inventory.status == "OK" and (#view.rows == 0 and "No configured materials in bags." or "Configured materials in bags")
         or "UNKNOWN: bag data unavailable"
     return view
+end
+
+function View.Prepared(plan, metadata)
+    local total = MP.SalePlan.Total(plan.quantity, plan.unitPrice)
+    return { itemID = plan.itemID, quantity = count(plan.quantity), duration = count(plan.durationHours) .. "h",
+        price = View.Money(plan.unitPrice), total = View.Money(total), target = plan.targetKind,
+        text = "Prepared Sale\n\n" .. metadata.name .. " (#" .. plan.itemID .. ")\n"
+            .. "Quantity: " .. count(plan.quantity) .. "\nDuration: " .. count(plan.durationHours) .. "h\n"
+            .. "Price each: " .. View.Money(plan.unitPrice) .. "\nTotal listed value: " .. View.Money(total)
+            .. "\nTarget: " .. plan.targetKind .. "\n\nSell item valid: YES\nCopper capability: OBSERVED TRUE"
+            .. "\nPostCommodity: PRESENT\n\nDRY RUN - no auction has been created." }
 end
 
 function View.Build(scanner, selectedItemID, metadata)

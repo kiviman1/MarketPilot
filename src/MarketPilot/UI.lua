@@ -200,7 +200,11 @@ function UI:Update()
         if itemID == view.itemID then row.selection:Show() else row.selection:Hide() end
         if view.itemsEnabled then row:Enable() else row:Disable() end
     end
+    local previousPlan = self.saleUI.confirmedPlan
     self.saleUI:Update()
+    if self.saleUI.confirmedPlan and self.saleUI.confirmedPlan ~= previousPlan then
+        self.scroll:SetVerticalScroll(math.min(self.scrollLimit, -self.saleUI.sectionTop))
+    end
 end
 
 function UI:MetadataReceived(itemID, success)
