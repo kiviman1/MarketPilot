@@ -11,20 +11,27 @@ local function notify(message)
 end
 local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, notify, time)
 MP.scanner = scanner
-panel = MP.UI.New(scanner, MP.Items, debug)
+local inventory = MP.Inventory.New(MP.Items)
+local sale = MP.SaleAssistant.New(inventory, scanner, MP.AuctionAPI, MP.Pricing, debug)
+MP.inventory, MP.sale = inventory, sale
+panel = MP.UI.New(scanner, MP.Items, debug, sale)
 MP.panel = panel
 local frame = CreateFrame("Frame")
 local startupError
 
 local function onEvent(event, itemID, success)
+    if event == "BAG_UPDATE_DELAYED" then
+        if scanner.ahOpen then sale:RefreshInventory(); panel:Guard(panel.Update) end
+        return
+    end
     if event == "GET_ITEM_INFO_RECEIVED" then panel:Guard(panel.MetadataReceived, itemID, success); return end
     if event == "ADDON_LOADED" then
         if scanner.ahOpen and not panel.anchor then panel:Open() end
         return
     end
     if startupError then return end
-    if event == "AUCTION_HOUSE_SHOW" then scanner:OnHouseOpened(); panel:Open()
-    elseif event == "AUCTION_HOUSE_CLOSED" then scanner:OnHouseClosed(); panel:Close()
+    if event == "AUCTION_HOUSE_SHOW" then sale:RefreshInventory(); scanner:OnHouseOpened(); panel:Open()
+    elseif event == "AUCTION_HOUSE_CLOSED" then sale:Close(); scanner:OnHouseClosed(); panel:Close()
     elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then scanner:OnReady()
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID) end
 end
@@ -51,6 +58,14 @@ for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ADDON_LOADED" }) do
     if not ok or err == false then debug("optional panel event unavailable: " .. event .. " " .. tostring(err)) end
 end
 
+do
+    local ok, err = pcall(frame.RegisterEvent, frame, "BAG_UPDATE_DELAYED")
+    if not ok or err == false then
+        inventory.blockedReason = "UNKNOWN: BAG_UPDATE_DELAYED unavailable: " .. tostring(err)
+        debug(inventory.blockedReason) -- Disable sale inventory, keep market browsing available.
+    end
+end
+
 SLASH_MARKETPILOT1 = "/mp"
 SlashCmdList.MARKETPILOT = function(input)
     local ok, err = pcall(function()
@@ -59,7 +74,8 @@ SlashCmdList.MARKETPILOT = function(input)
             if startupError then debug(startupError); return end
             scanner:Start()
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status (selected itemID=" .. scanner.itemID .. ")") end
+        elseif command == "sellstatus" then sale:CheckCapabilities(); panel:Guard(panel.Update)
+        else debug("commands: /mp scan | /mp status | /mp sellstatus (selected itemID=" .. scanner.itemID .. ")") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end

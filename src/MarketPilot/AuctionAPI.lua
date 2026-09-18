@@ -81,3 +81,57 @@ function AuctionAPI:ReadCommodityResults(itemID)
     end
     return levels
 end
+
+local SELL_CANDIDATES = {
+    "IsSellItemValid", "CalculateCommodityDeposit", "SupportsCopperValues",
+    "ShouldAutoPopulatePrice", "PostCommodity",
+}
+
+function AuctionAPI:SellCapabilities()
+    local result = { capabilities = {}, status = "NEEDS BETA CHECK" }
+    for _, name in ipairs(SELL_CANDIDATES) do
+        result.capabilities[#result.capabilities + 1] = { name = name,
+            presence = type(C_AuctionHouse) == "table" and type(C_AuctionHouse[name]) == "function"
+                and "PRESENT" or "ABSENT",
+            status = "UNKNOWN", detail = "not called; Forever behavior unverified" }
+    end
+    return result
+end
+
+-- External Blizzard declarations only (linked in API_FINDINGS); no signature retries.
+-- This explicit read-only probe cannot create auctions. Presence is not validation.
+function AuctionAPI:ProbeSell(itemID, location, quantity, hours, locationError)
+    local result = self:SellCapabilities()
+    local function observe(index, expected, detail, ...)
+        local row = result.capabilities[index]
+        local ok, value = call(row.name, ...)
+        row.detail = detail
+        if not ok then row.detail = detail .. "; " .. tostring(value); return end
+        if type(value) ~= expected or (expected == "number" and not integer(value, 0)) then
+            row.detail = detail .. "; unexpected return type/value: " .. type(value)
+            if type(value) == "string" or type(value) == "number" or type(value) == "boolean" then
+                row.detail = row.detail .. " " .. tostring(value)
+            end
+            return
+        end
+        row.status, row.value = "CANDIDATE_OBSERVED", value
+    end
+    observe(3, "boolean", "SupportsCopperValues()")
+    observe(4, "boolean", "ShouldAutoPopulatePrice()")
+    if location then
+        observe(1, "boolean", "IsSellItemValid(ItemLocation, false)", location, false)
+    else
+        result.capabilities[1].detail = locationError or "UNKNOWN: select a bag item / ItemLocation unavailable"
+    end
+    -- External sell UI uses duration indices 1/2/3; hours mapping needs beta comparison.
+    local duration = ({ [12] = 1, [24] = 2, [48] = 3 })[hours]
+    if integer(itemID, 1) and integer(quantity, 1) and duration then
+        observe(2, "number", "CalculateCommodityDeposit(" .. itemID .. ", " .. duration .. ", " .. quantity
+            .. "); candidate duration index for " .. hours .. "h", itemID, duration, quantity)
+        if result.capabilities[2].status == "CANDIDATE_OBSERVED" then result.deposit = result.capabilities[2].value end
+    else
+        result.capabilities[2].detail = "UNKNOWN: select a bag item and valid quantity/duration"
+    end
+    result.capabilities[5].detail = "presence only; NEVER CALLED; posting DISABLED; hardware/copper posting UNKNOWN"
+    return result
+end

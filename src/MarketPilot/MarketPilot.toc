@@ -1,13 +1,17 @@
 ## Interface: 16001
 ## Title: MarketPilot
-## Notes: MP-03 Auction House market browsing panel for Forever beta
+## Notes: MP-04 Sale Assistant foundation for Forever beta; posting disabled
 ## Author: Kivanc / MarketPilot
-## Version: 0.3.0
+## Version: 0.4.0
 
 Items.lua
 AuctionAPI.lua
 Statistics.lua
 Scanner.lua
+Pricing.lua
+Inventory.lua
+SaleAssistant.lua
 UIViewModel.lua
+SaleUI.lua
 UI.lua
 Core.lua

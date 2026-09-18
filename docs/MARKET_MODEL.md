@@ -243,3 +243,26 @@ confidenceInputs
 ```
 
 The separate Pricing module decides how these values are presented as reference sale targets.
+
+## 13. MP-04-v1 current-scan reference targets (implemented)
+
+`Pricing.Targets(analysis)` consumes the existing MP-02 analysis without modifying
+it or running Statistics again. It is pure Lua with no client calls or persistence.
+Each of `fast`, `normal`, `patient` returns `{ status, copper? }`.
+
+- If `analysis.anomaly.sufficient ~= true` (including missing analysis), all three
+  targets have status INSUFFICIENT and no copper value. Raw current lowest may
+  still be shown as a factual descriptor when the sample exists.
+- Fast is the minimum original unitPrice among rows classified exactly NORMAL.
+  SUSPICIOUS and EXTREME rows cannot set Fast. There is no 1-copper undercut.
+- Normal is exactly `analysis.clean.weightedMedian`.
+- Patient is exactly `analysis.clean.q3`.
+- Available values have status OK and must be positive exact integer copper
+  (at most 9007199254740991). Missing/invalid values or no NORMAL rows produce
+  UNKNOWN for the affected target; never zero, interpolation or silver rounding.
+
+No thresholds or quantiles in MP-02 change. Clean still retains SUSPICIOUS rows,
+so Normal/Patient can legitimately reflect them even though Fast excludes them;
+the targets are not forced into ascending order. These are current-scan reference
+levels, not guarantees of sale speed. No history, p-value, demand model or posting
+semantics are inferred. The future notes above remain unimplemented.

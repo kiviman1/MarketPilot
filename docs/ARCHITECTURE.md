@@ -50,7 +50,23 @@ Pure Lua. Input is normalized price-level data; output is robust descriptive sta
 Owns account-wide persistence, schema versioning, compact snapshots, retention, and migration. It does not decide sale prices.
 
 ### Pricing.lua
-Consumes current statistics plus history and produces reference outputs such as market value, lowest valid price, and optional fast/normal/patient targets. It must expose insufficient-data states rather than invent confidence.
+Pure Lua consuming current MP-02 analysis. MP-04 exposes Fast (lowest NORMAL row),
+Normal (clean weighted median) and Patient (clean Q3), gated on anomaly sufficiency.
+No history or pricing arithmetic/rounding. Each target has OK/UNKNOWN/INSUFFICIENT
+status; unavailable targets have no copper value.
+
+### Inventory.lua / SaleAssistant.lua
+Inventory owns guarded read-only bag calls and aggregate configured-item counts.
+Each refresh replaces slot addresses and increments a generation. Missing readers,
+invalid rows or unavailable bag events make inventory UNKNOWN, not an empty bag.
+ItemLocation is constructed only for the explicit read-only sell probe after a
+fresh bag read and slot check, never retained or persisted.
+
+SaleAssistant owns bag-item selection, bounded quantity, 12/24/48-hour duration,
+scan reuse and candidate observations. It shares Scanner's single in-flight gate.
+It consumes a DONE analysis only when sample itemID matches the sale selection;
+browsing another item cannot accidentally price the sale item. No second cache,
+queue, background query or posting action is introduced.
 
 ### UI.lua
 Owns a separate AH side panel and item/refresh click handlers. It requests scans
@@ -60,12 +76,17 @@ fields and formats integer copper, separately from native frame creation.
 
 ## Dependency direction
 
-Implemented through MP-03:
+Implemented through MP-04 foundation:
 
 ```text
 Core -> Scanner -> AuctionAPI
                 -> Statistics
+     -> SaleAssistant -> Inventory
+                      -> Scanner (request / existing analysis)
+                      -> Pricing
+                      -> AuctionAPI (read-only candidate sell probe)
      -> UI -> Scanner (manual item/refresh requests)
+           -> SaleUI -> SaleAssistant
            -> UIViewModel (presentation only)
 ```
 
@@ -82,15 +103,28 @@ arrivals refresh cached labels/icons. There are no per-frame scripts or timers.
 The panel uses its own frame parented to the top-level `AuctionHouseFrame`, anchored
 `TOPLEFT -> TOPRIGHT` with offsets `(8, 0)`. No Blizzard child frames are accessed
 or hooked. Missing anchors/rendering errors hide the panel and emit a diagnostic;
-scanner debugging remains available. Collapse hides only our body. AH close hides
-the whole panel and resets the scan. Sale Assistant is static MP-04 placeholder text.
+scanner debugging remains available. Collapse hides our body/scroll/footer. AH
+close hides the panel, resets the scan and clears sale selection/observations.
+The 320x650 panel now uses its own ScrollFrame with mouse-wheel and Up/Down
+controls, keeping Sale Assistant below the market without extending over native AH.
+Widgets are reused; no deep Blizzard child access or scroll polling is needed.
+
+Inventory updates on AH open and BAG_UPDATE_DELAYED while AH is open, plus a
+fresh read for explicit bag selection/candidate checks. Bag changes clear previous
+deposit observations, clamp quantity to remaining ownership, and clear a vanished
+selection. An unavailable bag event disables inventory without blocking browsing.
+Quantity/duration edits clear observations too. The Check sell API button and
+`/mp sellstatus` alone run the non-destructive candidates. Presence inspection is
+separate and never invokes a candidate. API errors stay UNKNOWN; zero deposit and
+false booleans are preserved. Post is permanently disabled with no click handler.
 
 External source references (not evidence of Forever compatibility):
 [Blizzard AH frame source mirror](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseFrame.xml)
 and [client item API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ItemDocumentation.lua).
-Actual frame availability/layout and metadata behavior remain an in-client check.
+MP-03 layout/browsing was user-validated; new MP-04 bag/sell/scroll behavior still
+requires client validation. Candidate API references/status are in API_FINDINGS.
 
-The broader graph below remains a future plan; MP-03 has no Database or Pricing:
+The broader graph below remains a future plan; production still has no Database:
 
 ```text
 Core

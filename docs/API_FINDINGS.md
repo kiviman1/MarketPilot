@@ -53,7 +53,8 @@ AUCTION_HOUSE_THROTTLED_SPECIFIC_SEARCH_READY: CONFIRMED unavailable — registr
 
 ```text
 Copper Ore (2770) result path: CONFIRMED — commodity
-Other gathering items' result paths: UNKNOWN
+Peacebloom (2447) and Light Leather (2318) result paths: CONFIRMED commodity via MP-03 click scans
+Other configured gathering items' result paths: UNKNOWN
 unitPrice unit: CONFIRMED — per-unit price in copper; 200 matches 2 silver/unit in AH UI
 quantity meaning: CONFIRMED — total quantity at that commodity price level; 285 matches the AH UI total of 285
 row aggregation behavior: CONFIRMED — observed commodity quantity is aggregated at its price level
@@ -145,9 +146,59 @@ Prices are copper per unit. The insufficient classification with four price
 levels is expected and was confirmed in-client. Per-level quantities were not
 provided; do not reconstruct them from these aggregate observations.
 
-## MP-03 validation — UNKNOWN / pending
+## MP-03 validation — CONFIRMED
 
-The side panel, top-level `AuctionHouseFrame` anchor, client item metadata lookup,
-screen fit and click-driven browsing have not yet been observed in Forever beta.
-Additional configured item IDs beyond Copper Ore have not been confirmed as
-commodity queries. Offline frame fixtures do not confirm these client behaviors.
+2026-09-18 (user report received): the right panel works in the real Forever beta
+client. Copper Ore, Peacebloom and Light Leather scan through item clicks. Outlier
+information displays correctly; collapse/expand works; AH close hides the panel
+and reopening restores it without Lua errors. This confirms the tested MP-03
+layout, not every resolution/UI scale or the new MP-04 controls.
+
+Sub-silver commodity listing prices (20 copper Peacebloom) were also reported.
+This is display/search evidence only, not proof of copper-valued posting support.
+
+## MP-04 sell-side and inventory — UNKNOWN / awaiting beta validation
+
+No MP-04 client observation has been supplied. Offline fixtures do not change any
+of the statuses below. Runtime `PRESENT` means only that a function exists;
+`CANDIDATE_OBSERVED` means the explicit read-only candidate call returned the
+expected primitive type. Neither label claims its semantics are beta-confirmed.
+
+| Candidate | Read-only probe shape | Forever status |
+|---|---|---|
+| `IsSellItemValid` | `(ItemLocation, false)`; boolean result | UNKNOWN |
+| `CalculateCommodityDeposit` | `(itemID, durationIndex, quantity)`; non-negative integer candidate deposit | UNKNOWN |
+| `SupportsCopperValues` | `()`; boolean result, including false | UNKNOWN |
+| `ShouldAutoPopulatePrice` | `()`; boolean result, including false | UNKNOWN |
+| `PostCommodity` | Presence check only; NEVER CALLED | UNKNOWN |
+
+These candidate shapes are external references, not signature guesses or Forever
+findings: [Blizzard API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/AuctionHouseDocumentation.lua).
+The [external sell UI](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseSellFrame.lua)
+uses duration indices. The probe tests candidate mapping 12h/24h/48h to 1/2/3 and
+logs both; the mapping, deposit unit/amount and return semantics still require
+comparison in Forever. No alternate signatures are attempted on failure.
+
+The bag boundary uses the documented namespaced readers and primitive itemID /
+stackCount fields: [container declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ContainerDocumentation.lua).
+It enumerates backpack 0 through the client's equipped bag count, including a
+reagent bag when exposed by NUM_TOTAL_EQUIPPED_BAG_SLOTS; otherwise NUM_BAG_SLOTS.
+See [external bag constants](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_FrameXMLBase/Constants.lua).
+The candidate [ItemLocation constructor](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_ObjectAPI/Mainline/ItemLocation.lua)
+is called only for the explicit check, after rereading bags and verifying the slot.
+Bag readers, their shapes, equipped-bag coverage, `BAG_UPDATE_DELAYED`, ItemLocation
+acceptance and the new scrolling/edit controls remain UNKNOWN in Forever.
+
+Use **Check sell API (no post)** or `/mp sellstatus` with AH open and a bag item
+selected. The command reports each presence/status/value, attempted argument
+shape and any original error. Missing APIs, errors, nil or malformed results stay
+UNKNOWN. False booleans and a valid candidate zero deposit remain visible.
+Deposit is labelled candidate, invalidated by quantity/duration/bag changes and
+only recalculated by another explicit check. It is not rounded to silver.
+
+Real posting remains disabled and has no action handler. Hardware-event gating,
+non-zero-copper posting acceptance, commodity matching/undercut order and deposit
+semantics are UNKNOWN. A true SupportsCopperValues result alone cannot confirm a
+real post. No runtime result enables posting; that requires a subsequent scoped
+task after user-provided beta evidence. `auctionID` semantics remain UNKNOWN and
+production code never reads it. No production SavedVariables/schema changes.

@@ -1,4 +1,4 @@
-# MarketPilot — MP-03 Auction House side panel
+# MarketPilot — MP-04 Sale Assistant foundation (posting disabled)
 
 Copy `src/MarketPilot/` into the beta client's `Interface/AddOns/` directory.
 Enable MarketPilot and open AH after login (or close/reopen it after `/reload`).
@@ -13,15 +13,20 @@ Items.lua
 AuctionAPI.lua
 Statistics.lua
 Scanner.lua
+Pricing.lua
+Inventory.lua
+SaleAssistant.lua
 UIViewModel.lua
+SaleUI.lua
 UI.lua
 Core.lua
 ```
 
 `Core` wires AH/scanner events to the panel; slash commands remain debug helpers.
 `Items` contains Mining IDs 2770/2771/2775, Herbalism ID 2447 and Skinning ID 2318.
-Only Copper Ore (2770) is beta-confirmed; the other IDs are representative query
-candidates. Display names/icons come from guarded client item-info calls, with
+Copper Ore (2770), Peacebloom (2447) and Light Leather (2318) click scans are
+beta-confirmed; the remaining IDs are representative candidates.
+Display names/icons come from guarded client item-info calls, with
 an `Item #ID (UNKNOWN)` label and question-mark icon until resolved. Metadata is
 cached and refreshed on successful `GET_ITEM_INFO_RECEIVED`, without polling.
 `Scanner` calls `AuctionAPI`, the sole production compatibility
@@ -51,8 +56,34 @@ invalid prices display UNKNOWN, never zero. Money presentation uses gold/silver/
 copper; Statistics continues to use integer copper.
 
 The header +/- control collapses/expands only the MarketPilot body. AH close
-hides the panel; selection/collapse state is session-only. The Sale Assistant
-section is just `Coming in MP-04`: no bag selection, price fill or sell actions.
+hides the panel; selection/collapse state is session-only. Scroll inside the panel
+(mouse wheel or Up/Down) to reach Sale Assistant below the market section.
+
+Sale Assistant lists only configured materials currently in bags with client
+icon/name and aggregated counts. Click a bag item to scan it, or reuse the current
+DONE result for that same item. Active scans prevent parallel selection/queries.
+Sale selection is independent of subsequent market browsing; another item's result
+never supplies its prices. Use the market Refresh button for a fresh selected-item
+scan. No age-based cache or automatic refresh is added.
+
+Enter a whole-number quantity (Enter or leaving the input commits it); Max selects
+all owned units. Escape restores the prior quantity. Choose 12h/24h/48h. Bag events
+refresh counts, clamp quantity when ownership falls, and clear missing selections.
+Quantity/duration/bag changes invalidate candidate deposit observations. Bag API
+errors display UNKNOWN and leave market browsing usable.
+
+Fast/Normal/Patient all display INSUFFICIENT unless `anomaly.sufficient == true`.
+With sufficient data, Fast is the lowest NORMAL row (never suspicious/extreme;
+no undercut), Normal the clean weighted median, and Patient clean Q3. Exact copper
+is retained, including 20c; these reference levels do not guarantee sale speed.
+The raw current lowest is factual and may remain visible on insufficient samples.
+
+**Check sell API (no post)** performs only the four read-only candidates and logs
+presence, argument shape, primitive result or error. `/mp sellstatus` performs the
+same check. Select a bag item first for validation/deposit, then rerun after changing
+quantity/duration. Deposit is labelled **candidate**; absent/malformed/error results
+stay UNKNOWN. The fifth candidate is presence-only. Post is always disabled and
+has no handler. There is no price filling, secure proxy, bag mutation or real post.
 
 `IDLE -> WAITING -> QUERYING -> COLLECTING -> DONE`; errors enter `ERROR`,
 and AH close cancels/resets to `IDLE`. `/mp scan` also scans the selected item.
@@ -71,7 +102,7 @@ sample with total quantity 0 and UNKNOWN lowest/highest prices.
 `/mp status` and completion output show state, itemID, session query count, level
 count, summed quantity and lowest/highest copper prices. These are debugging
 summaries only. Samples/analysis are cleared on new scans and AH close; reload clears
-all production state. There is no persistence, pricing, full
+all production state. There is no persistence, full
 item list, paging, automatic buying/posting, timers or per-frame polling.
 
 There is no automatic timeout/retry: if no result or ready event arrives, status
@@ -87,17 +118,20 @@ subsequent updates are ignored until another manual scan.
 The panel is its own frame, parented only to the top-level `AuctionHouseFrame` and
 anchored `TOPLEFT` to its `TOPRIGHT`, 8 UI units to the right. No deep frame hooks,
 Blizzard repositioning or replacement. It is 320 UI units wide and approximately
-659 high for this five-item catalogue, shrinking to a 42-high header when collapsed.
+650 high with internal scrolling, shrinking to a 42-high header when collapsed.
 It is not clamped back over Blizzard controls; screen fit at the user's UI scale
-must be checked in the beta client. This small list uses reusable row widgets;
-an eventual full catalogue would need a separate scrolling/filtering task.
+must be checked in the beta client. Both small lists use reusable row widgets;
+an eventual full catalogue/filtering remains out of scope.
 
 If the top-level frame is unavailable or anchoring fails, the panel stays hidden
 and logs `panel UNKNOWN`; debug commands remain usable. A later `ADDON_LOADED`
 while AH is open retries a missing anchor. Native rendering errors are isolated
 from completed scanner data. Namespaced `C_Item.GetItemInfo` or the legacy global
 `GetItemInfo` resolves display metadata only; no alternative AH signatures are used.
-Forever frame/metadata compatibility is still unverified for MP-03.
+MP-03 was user-validated in Forever; the MP-04 scroll/edit/bag/sell controls are
+still pending in-client validation. `Inventory` currently uses namespaced
+`C_Container` readers and the client's equipped bag count; there is no guessed
+legacy signature fallback. Unsupported readers, events or shapes remain UNKNOWN.
 
 ## MP-02 analysis
 
@@ -114,7 +148,8 @@ means INSUFFICIENT; raw/clean descriptors are still available and no EXTREME lev
 is removed. With sufficient data EXTREME requires both |modified Z| > 6 and a
 3*IQR fence violation. SUSPICIOUS uses |Z| > 3.5 or a 1.5*IQR violation and stays
 in all clean calculations. These are current-scan descriptions, not trade advice
-or calibrated confidence. There is no history, p-value or pricing recommendation.
+or calibrated confidence. Statistics has no history or p-value; the separate pure
+Pricing module now interprets these descriptors using MP-04-v1 rules.
 
 ## Offline tests
 
@@ -124,32 +159,44 @@ Run from repository root with Lua 5.1:
 lua tests/marketpilot_spec.lua
 lua tests/statistics_spec.lua
 lua tests/ui_spec.lua
+lua tests/pricing_spec.lua
+lua tests/sale_spec.lua
 lua probe/tests/probe_spec.lua
 ```
 
 The production suite includes TOC and static boundary/scope checks. Fixtures do
 not establish new beta facts. Probe persistence, the MP-01 query flow and MP-02
 four-level statistics were validated in-client; see `docs/API_FINDINGS.md`.
-MP-03 adds no persistence. UI tests use mocked native frames, not a game renderer.
+MP-04 adds no persistence. UI tests use mocked native frames, not a game renderer.
+The pricing suite runs in a restricted pure-Lua environment; inventory/sale tests
+exercise stale slots, counts, input bounds, API failures and the no-post boundary.
 
-## In-game checklist (MP-03 not yet performed)
+## In-game checklist (MP-04 pending; no posting)
 
 1. Copy the entire updated addon directory, reload, then open AH. The panel should
    appear on the right, without covering AH controls or leaving the screen. Confirm
-   category labels, resolved item names/icons and the MP-04 placeholder.
-2. Click Copper Ore once. Confirm one query, WAITING if throttled, then DONE.
-   Repeat clicks while active must not add queries or change selection.
-3. Compare panel lowest, medians, quantity, levels and anomaly counts with
-   `/mp status` and visible AH data. For the reported four-level cases expect
-   INSUFFICIENT, zero extreme levels and equal raw/clean medians. 199 copper must
-   render as `0g 1s 99c`; 200 as `0g 2s 0c`. Check the clean Q1–Q3 range too.
-4. Click Refresh; one new scan should replace values. Toggle collapse/expand
-   during idle and an active scan. No query should be sent by toggling the panel.
-5. Select a representative item in each other category. Record whether the item
-   exists, names/icons resolve and the commodity result path works. These are
-   unverified items; missing APIs/data must remain UNKNOWN/ERROR, not zero prices.
-6. Close AH while waiting/querying: the panel must disappear and the scan reset.
-   Reopen and click Copper Ore again; no Lua errors, extra panels or parallel queries.
-7. Confirm Sale Assistant has no actionable selling controls. Return output and
-   a screenshot at your resolution/UI scale. MP-03's visual acceptance requires
-   this actual client test; offline fixtures alone do not establish it.
+   category labels, collapse/expand, mouse-wheel and Up/Down scrolling.
+2. Have configured materials in multiple bag slots. Check Sale Assistant icons,
+   names and aggregate counts; unrelated items must not appear. Change bag contents
+   manually and verify counts update, stale selection/deposit clears, and quantity
+   cannot exceed the new total. Include an equipped reagent bag if applicable.
+3. Click a bag item. Confirm one scan, WAITING if throttled, then DONE. Repeated
+   clicks while active cannot send another query or change the sale selection.
+   Selecting the same completed item reuses its current result; market Refresh
+   sends one new query. Browsing another item must not price the selected sale item.
+4. Compare lowest and target values. Four distinct levels must produce INSUFFICIENT
+   Fast/Normal/Patient while preserving known raw lowest. With sufficient data,
+   check Fast against the lowest NORMAL row, Normal against clean median and
+   Patient against clean Q3. 20 copper must stay `0g 0s 20c`.
+5. Edit quantity, try more than owned, use Max, and select each duration. Confirm
+   quantity remains a positive integer within ownership and no scan is added.
+6. Click Check sell API and run `/mp sellstatus`. Record presence/status, attempted
+   signatures and exact returns/errors for each duration and more than one quantity.
+   Deposit starts UNKNOWN and is only a candidate even after a successful call.
+   Compare duration/deposit with native UI if available; do not submit a sale.
+7. Verify Post stays disabled throughout, including API success, scan completion,
+   repeated checks and closing/reopening AH. No auction must be created. Close AH
+   during a scan; reopen and verify browsing still works without Lua errors.
+8. Return debug output, build/interface and screenshots at your UI scale. Bag APIs,
+   new controls and all sell semantics await this evidence. Hardware/copper posting
+   acceptance remains UNKNOWN and is intentionally not tested by this commit.

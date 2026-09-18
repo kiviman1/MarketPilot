@@ -18,6 +18,37 @@ local function count(value)
     return integer(value, 0) and string.format("%.0f", value) or "UNKNOWN"
 end
 
+function View.Sale(state, items)
+    local view = { rows = {}, enabled = state.enabled, quantity = count(state.quantity), duration = state.duration,
+        name = state.itemID and items.Metadata(state.itemID).name or "Select a bag item",
+        owned = count(state.owned), state = state.scanState, lowest = View.Money(state.lowest),
+        message = state.message or "Reference targets, not sale guarantees. Posting disabled." }
+    for _, category in ipairs(items.categories) do
+        for _, id in ipairs(category.itemIDs) do
+            local item = state.inventory.items[id]
+            if item then
+                local info = items.Metadata(id)
+                view.rows[#view.rows + 1] = { itemID = id, name = info.name, icon = info.icon, count = count(item.count) }
+            end
+        end
+    end
+    for _, key in ipairs({ "fast", "normal", "patient" }) do
+        local target = state.targets[key]
+        view[key] = target.status == "OK" and View.Money(target.copper) or target.status
+    end
+    local capabilities, lines = state.capabilities, {}
+    for _, row in ipairs(capabilities.capabilities) do
+        lines[#lines + 1] = row.name .. ": " .. row.presence .. " / "
+            .. (row.value == nil and "UNKNOWN" or tostring(row.value))
+    end
+    view.capabilities = "NEEDS BETA CHECK (candidate values)\n" .. table.concat(lines, "\n")
+    view.deposit = capabilities.deposit == 0 and "0g 0s 0c (candidate)"
+        or (capabilities.deposit and (View.Money(capabilities.deposit) .. " (candidate)")) or "UNKNOWN"
+    view.bags = state.inventory.status == "OK" and (#view.rows == 0 and "No configured materials in bags." or "Configured materials in bags")
+        or "UNKNOWN: bag data unavailable"
+    return view
+end
+
 function View.Build(scanner, selectedItemID, metadata)
     local busy = scanner:IsActive()
     local current = scanner.state == "DONE" and scanner.sample and scanner.sample.itemID == selectedItemID

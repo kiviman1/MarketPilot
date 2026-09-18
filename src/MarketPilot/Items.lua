@@ -2,7 +2,7 @@ local _, MP = ...
 
 local Items = {
     testItemID = 2770,
-    -- Representative IDs only. Commodity behavior beyond 2770 needs beta tests.
+    -- Representative IDs only. 2770, 2447 and 2318 commodity scans are beta-confirmed.
     categories = {
         { name = "Mining", itemIDs = { 2770, 2771, 2775 } },
         { name = "Herbalism", itemIDs = { 2447 } },

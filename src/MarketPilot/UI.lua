@@ -12,9 +12,9 @@ local FIELDS = {
     { "Anomaly model", "sufficient" }, { "Scanner", "state" },
 }
 
-function UI.New(scanner, items, report)
+function UI.New(scanner, items, report, sale)
     return setmetatable({ scanner = scanner, items = items, report = report,
-        selectedItemID = scanner.itemID, collapsed = false, rows = {}, values = {} }, UI)
+        sale = sale, selectedItemID = scanner.itemID, collapsed = false, rows = {}, values = {} }, UI)
 end
 
 function UI:Warn(message)
@@ -46,6 +46,11 @@ function UI:Scan()
     return self:ClickItem(self.selectedItemID)
 end
 
+function UI:Scroll(delta)
+    local offset = self.scroll:GetVerticalScroll() + delta
+    self.scroll:SetVerticalScroll(math.max(0, math.min(self.scrollLimit, offset)))
+end
+
 local function label(parent, text, x, y, width, font)
     local value = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
     value:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -75,9 +80,26 @@ function UI:Create(anchor)
     self.toggle:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -10, -9)
     self.toggle:SetScript("OnClick", function() self:Guard(self.Toggle) end)
 
-    self.body = CreateFrame("Frame", nil, panel)
-    self.body:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -42)
-    self.body:SetSize(WIDTH, HEIGHT - 42)
+    self.scroll = CreateFrame("ScrollFrame", nil, panel)
+    self.scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -42)
+    self.scroll:SetSize(WIDTH, HEIGHT - 78)
+    self.scroll:EnableMouseWheel(true)
+    self.scroll:SetScript("OnMouseWheel", function(_, delta) self:Guard(self.Scroll, -delta * 80) end)
+    self.body = CreateFrame("Frame", nil, self.scroll)
+    self.body:SetSize(WIDTH, HEIGHT - 78)
+    self.scroll:SetScrollChild(self.body)
+    self.footer = CreateFrame("Frame", nil, panel)
+    self.footer:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0)
+    self.footer:SetSize(WIDTH, 32)
+    label(self.footer, "Scroll for Sale Assistant", 14, -8, 204)
+    for index, direction in ipairs({ -1, 1 }) do
+        local step = direction
+        local button = CreateFrame("Button", nil, self.footer, "UIPanelButtonTemplate")
+        button:SetSize(40, 24)
+        button:SetPoint("TOPLEFT", self.footer, "TOPLEFT", 220 + (index - 1) * 44, -3)
+        button:SetText(direction == -1 and "Up" or "Down")
+        button:SetScript("OnClick", function() self:Guard(self.Scroll, step * 260) end)
+    end
     local y = -2
     for _, category in ipairs(self.items.categories) do
         label(self.body, category.name, 14, y, WIDTH - 28, "GameFontNormalSmall")
@@ -118,11 +140,10 @@ function UI:Create(anchor)
     self.scan:SetPoint("TOPLEFT", self.body, "TOPLEFT", 14, y - 70)
     self.scan:SetSize(WIDTH - 28, 26)
     self.scan:SetScript("OnClick", function() self:Guard(self.Scan) end)
-    label(self.body, "Sale Assistant", 14, y - 110, WIDTH - 28, "GameFontNormal")
-    label(self.body, "Coming in MP-04", 14, y - 130, WIDTH - 28)
-    -- Height follows the small catalogue; widgets are created only once.
-    self.expandedHeight = 42 - y + 154
-    self.body:SetHeight(self.expandedHeight - 42)
+    self.saleUI = MP.SaleUI.New(self.body, self.sale, self.items, function() self:Guard(self.Update) end, y - 110)
+    self.expandedHeight = HEIGHT
+    self.body:SetHeight(-self.saleUI.bottom)
+    self.scrollLimit = math.max(0, -self.saleUI.bottom - (HEIGHT - 78))
     self.anchor = anchor
 end
 
@@ -164,7 +185,8 @@ function UI:Update()
     local view = self.view
     self.frame:SetHeight(self.collapsed and 42 or self.expandedHeight)
     self.toggle:SetText(self.collapsed and "+" or "-")
-    if self.collapsed then self.body:Hide() else self.body:Show() end
+    if self.collapsed then self.body:Hide(); self.scroll:Hide(); self.footer:Hide()
+    else self.body:Show(); self.scroll:Show(); self.footer:Show() end
     self.name:SetText(view.name)
     for _, field in ipairs(FIELDS) do self.values[field[2]]:SetText(view[field[2]]) end
     self.message:SetText(view.message)
@@ -178,6 +200,7 @@ function UI:Update()
         if itemID == view.itemID then row.selection:Show() else row.selection:Hide() end
         if view.itemsEnabled then row:Enable() else row:Disable() end
     end
+    self.saleUI:Update()
 end
 
 function UI:MetadataReceived(itemID, success)

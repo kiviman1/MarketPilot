@@ -19,6 +19,18 @@ local function fixture(configure)
         local w = { kind = kind, parent = parent, shown = true, enabled = true, scripts = {}, events = {} }
         f.objects[#f.objects + 1] = w
         function w:GetObjectType() return self.kind end
+        function w:GetParent() return self.parent end
+        function w:ClearAllPoints() self.point = nil end
+        function w:EnableMouseWheel(value) self.mouseWheel = value end
+        function w:SetScrollChild(child) self.child = child end
+        function w:GetVerticalScroll() return self.offset or 0 end
+        function w:SetVerticalScroll(value) self.offset = value end
+        function w:SetAutoFocus(value) self.autoFocus = value end
+        function w:SetNumeric(value) self.numeric = value end
+        function w:SetMaxLetters(value) self.maxLetters = value end
+        function w:GetText() return self.text end
+        function w:HasFocus() return self.focused end
+        function w:ClearFocus() self.focused = false end
         function w:SetPoint(...)
             if f.failAnchor and self.kind == "Frame" and self.parent == env.AuctionHouseFrame then error("fixture anchor failure") end
             self.point = { ... }
@@ -41,10 +53,14 @@ local function fixture(configure)
         function w:CreateFontString(_, _, font) local item = widget("FontString", self); item.font = font; return item end
         function w:CreateTexture() return widget("Texture", self) end
         function w:SetScript(event, callback)
-            assert(event == "OnEvent" or event == "OnClick", "unexpected hook: " .. event)
+            assert(({ OnEvent = true, OnClick = true, OnMouseWheel = true,
+                OnEnterPressed = true, OnEscapePressed = true, OnEditFocusLost = true })[event], "unexpected hook: " .. event)
             self.scripts[event] = callback
         end
-        function w:RegisterEvent(event) self.events[event] = true end
+        function w:RegisterEvent(event)
+            if f.failBagEvent and event == "BAG_UPDATE_DELAYED" then error("fixture bag event unavailable") end
+            self.events[event] = true
+        end
         function w:Click(force)
             if force or (self.enabled and self:IsVisible()) then return self.scripts.OnClick(self) end
         end
@@ -60,6 +76,13 @@ local function fixture(configure)
     f.makeAnchor()
     env.print = function(line) f.output[#f.output + 1] = line end
     env.time = function() return 123456 end
+    f.bags, f.posts = { [0] = {} }, 0
+    env.NUM_BAG_SLOTS = 4
+    env.C_Container = {
+        GetContainerNumSlots = function(bag) return #(f.bags[bag] or {}) end,
+        GetContainerItemInfo = function(bag, slot) return (f.bags[bag] or {})[slot] end,
+    }
+    env.ItemLocation = { CreateFromBagAndSlot = function(_, bag, slot) return { bag = bag, slot = slot } end }
     env.GetItemInfo = function(id)
         f.infoCalls[id] = (f.infoCalls[id] or 0) + 1
         if not f.namesReady then return nil end
@@ -75,6 +98,11 @@ local function fixture(configure)
         IsThrottledMessageSystemReady = function() return f.ready end,
         GetNumCommoditySearchResults = function() return #f.rows end,
         GetCommoditySearchResultInfo = function(_, index) f.reads = f.reads + 1; return f.rows[index] end,
+        IsSellItemValid = function(location, displayError) assert(location.bag and displayError == false); return true end,
+        CalculateCommodityDeposit = function(id, duration, quantity) return duration * quantity end,
+        SupportsCopperValues = function() return true end,
+        ShouldAutoPopulatePrice = function() return false end,
+        PostCommodity = function() f.posts = f.posts + 1; error("posting forbidden") end,
     }
     if configure then configure(f) end
     f.mp = {}
@@ -99,7 +127,7 @@ local passed = 0
 local function test(name, run) run(); passed = passed + 1; print("PASS " .. name) end
 
 test("UI static boundaries and presentation-only money conversion", function()
-    for _, path in ipairs({ "UI.lua", "UIViewModel.lua" }) do
+    for _, path in ipairs({ "UI.lua", "UIViewModel.lua", "SaleUI.lua" }) do
         local source = read(ROOT .. path)
         for _, forbidden in ipairs({ "C_AuctionHouse", "Statistics.Analyze", "math.log", "OnUpdate", "HookScript", "hooksecurefunc",
             "SavedVariables", "PostItem", "PostCommodity", "auctionID", "C_Container", "SetAuction" }) do
@@ -323,17 +351,114 @@ test("UI render errors do not discard a completed scanner result", function()
     assert(not f.panel.frame.shown)
 end)
 
-test("sale assistant is only two static labels without any action", function()
+test("sale section is internally scrollable and posting has no action", function()
     local f = fixture()
     f:open()
-    local labels = 0
-    for _, w in ipairs(f.objects) do
-        if w.text == "Sale Assistant" or w.text == "Coming in MP-04" then
-            assert(w.kind == "FontString" and next(w.scripts) == nil)
-            labels = labels + 1
+    assert(f.panel.frame.height == 650 and f.panel.scrollLimit > 0)
+    f.panel:Scroll(10000)
+    assert(f.panel.scroll.offset == f.panel.scrollLimit)
+    f.panel.scroll.scripts.OnMouseWheel(nil, 10000)
+    assert(f.panel.scroll.offset == 0)
+    assert(not f.panel.saleUI.post.enabled and f.panel.saleUI.post.scripts.OnClick == nil)
+    assert(f.panel.saleUI.view.bags == "No configured materials in bags." and f.posts == 0 and #f.sent == 0)
+end)
+
+test("bag selection aggregates counts, reuses current scan and never scans in parallel", function()
+    local f = fixture()
+    f.bags[0] = { { itemID = 2770, stackCount = 10 }, { itemID = 99999, stackCount = 1 } }
+    f.bags[1] = { { itemID = 2770, stackCount = 27 }, { itemID = 2447, stackCount = 3 } }
+    f:open()
+    local saleUI = f.panel.saleUI
+    assert(saleUI.rows[2770].name.text == "Client item 2770 x37" and not saleUI.rows[2318].shown)
+    saleUI.rows[2770]:Click()
+    saleUI.rows[2770]:Click(true); saleUI.rows[2447]:Click(true)
+    assert(#f.sent == 1 and f.mp.sale.itemID == 2770 and saleUI.view.owned == "37")
+    f:complete(); saleUI.rows[2770]:Click()
+    assert(#f.sent == 1 and f.mp.sale.quantity == 37)
+    assert(saleUI.view.fast == "INSUFFICIENT" and saleUI.view.lowest == "0g 1s 99c")
+    f.panel.rows[2447]:Click(); f:complete()
+    assert(f.mp.sale.itemID == 2770 and saleUI.view.lowest == "UNKNOWN")
+    assert(f.posts == 0)
+end)
+
+test("sale quantity/duration controls and candidate checks never enable posting", function()
+    local f = fixture()
+    f.bags[0] = { { itemID = 2770, stackCount = 37 } }
+    f:open(); local ui = f.panel.saleUI
+    ui.rows[2770]:Click(); f:complete()
+    ui.quantity:SetText("10"); ui.quantity.scripts.OnEnterPressed(ui.quantity)
+    ui.durations[24]:Click(); ui.check:Click()
+    assert(f.mp.sale.quantity == 10 and f.mp.sale.duration == 24)
+    assert(ui.view.deposit == "0g 0s 20c (candidate)" and f:has("CalculateCommodityDeposit(2770, 2, 10)"))
+    assert(ui.view.capabilities:find("ShouldAutoPopulatePrice: PRESENT / false", 1, true))
+    ui.quantity:SetText("38"); ui.quantity.scripts.OnEnterPressed(ui.quantity)
+    assert(f.mp.sale.quantity == 10 and ui.view.message:find("whole number", 1, true))
+    ui.maximum:Click(); assert(f.mp.sale.quantity == 37 and ui.view.deposit == "UNKNOWN")
+    f.env.SlashCmdList.MARKETPILOT("sellstatus")
+    f:event("AUCTION_HOUSE_CLOSED"); f:open()
+    assert(f.mp.sale.itemID == nil and f.mp.sale.probe == nil and not ui.post.enabled and f.posts == 0)
+end)
+
+test("bag changes clamp quantity and clear stale deposit without losing browse analysis", function()
+    local f = fixture()
+    f.bags[0] = { { itemID = 2770, stackCount = 37 } }
+    f:open(); local ui = f.panel.saleUI
+    ui.rows[2770]:Click(); f:complete(); ui.check:Click()
+    local sample = f.scanner.sample
+    f.bags[0][1].stackCount = 3
+    f:event("BAG_UPDATE_DELAYED")
+    assert(f.mp.sale.quantity == 3 and ui.view.owned == "3" and ui.view.deposit == "UNKNOWN")
+    f.bags[0] = {}; f:event("BAG_UPDATE_DELAYED")
+    assert(f.mp.sale.itemID == nil and not ui.rows[2770].shown and f.scanner.sample == sample and #f.sent == 1)
+end)
+
+test("candidate failures remain UNKNOWN without breaking market browsing", function()
+    local f = fixture(function(f)
+        for _, name in ipairs({ "IsSellItemValid", "CalculateCommodityDeposit", "SupportsCopperValues", "ShouldAutoPopulatePrice" }) do
+            f.env.C_AuctionHouse[name] = function() error("fixture candidate failure") end
         end
+    end)
+    f.bags[0] = { { itemID = 2770, stackCount = 2 } }
+    f:open(); local ui = f.panel.saleUI
+    ui.rows[2770]:Click(); f:complete(); ui.check:Click()
+    assert(ui.view.deposit == "UNKNOWN" and f:has("fixture candidate failure") and f.scanner.state == "DONE")
+    f.panel.scan:Click(); f:complete()
+    assert(#f.sent == 2 and f.panel.frame.shown and f.posts == 0)
+end)
+
+test("sufficient sale targets preserve 20 copper and consume existing analysis", function()
+    local f = fixture()
+    f.bags[0] = { { itemID = 2447, stackCount = 12 } }
+    f.rows = {}
+    for price = 20, 28 do f.rows[#f.rows + 1] = { unitPrice = price, quantity = 1 } end
+    f:open(); local ui = f.panel.saleUI
+    ui.rows[2447]:Click(); f:complete()
+    f.mp.Statistics.Analyze = function() error("no recalculation") end
+    f.panel:Update(); ui.check:Click()
+    assert(ui.view.fast == "0g 0s 20c" and ui.view.normal == "0g 0s 24c" and ui.view.patient == "0g 0s 26c")
+    assert(f.scanner.state == "DONE" and f.posts == 0)
+end)
+
+test("missing bag reader/event leaves inventory UNKNOWN and browsing operational", function()
+    for _, failure in ipairs({ "reader", "event" }) do
+        local f = fixture(function(f)
+            if failure == "reader" then f.env.C_Container = nil else f.failBagEvent = true end
+        end)
+        f:open(); f.panel.scan:Click(); f:complete()
+        assert(f.scanner.state == "DONE" and f.mp.inventory.status == "UNKNOWN")
+        assert(f.panel.saleUI.view.bags == "UNKNOWN: bag data unavailable" and f.panel.frame.shown)
+        assert(f.mp.sale.itemID == nil and f.posts == 0)
     end
-    assert(labels == 2 and #f.sent == 0)
+end)
+
+test("failed sale scan exposes original error and never fabricates a target", function()
+    local f = fixture()
+    f.bags[0] = { { itemID = 2770, stackCount = 5 } }
+    f.rows[1].unitPrice = nil
+    f:open(); f.panel.saleUI.rows[2770]:Click(); f:complete()
+    local view = f.panel.saleUI.view
+    assert(view.state == "ERROR" and view.lowest == "UNKNOWN" and view.fast == "INSUFFICIENT")
+    assert(view.message:find("unitPrice", 1, true) and f.mp.sale.itemID == 2770)
 end)
 
 print("PASS " .. passed .. " UI offline tests (Lua 5.1); real frame rendering remains unverified")
