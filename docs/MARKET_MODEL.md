@@ -1,18 +1,27 @@
 # Robust Market Model
 
-This document defines the initial statistical model. Thresholds are deliberately versioned and may be tuned after real beta data is collected.
+Sections 1–8 define the implemented **MP-02-v1** current-scan model. Changes to
+quantiles, thresholds or guards require an explicit model-version/documentation
+and deterministic-test update. Sections 9–12 are future design notes, not MP-02
+features. MP-02 returns descriptors and classifications, never a sale recommendation.
 
 ## 1. Normalize price
 
-All calculations use integer copper per unit:
+Input is the MP-01 sample's dense `priceLevels` array of primitive rows:
 
 ```text
-unitPrice = buyout / quantity
+{ unitPrice = <positive integer copper per unit>, quantity = <positive integer> }
 ```
 
-If the live API already returns unit price, keep the Blizzard value after validating its semantics in MP-00.
+Preserve the API's already verified unitPrice as-is: no division, conversion,
+rounding or inferred values. Reject missing, non-number, zero, negative, fractional,
+NaN, infinite or greater-than-9007199254740991 values for either field. Reject a
+sparse/malformed array and any total quantity exceeding that exact-integer limit.
+Invalid input returns `nil, "UNKNOWN: ..."`; no partial analysis is returned.
 
-Never compare raw stack totals.
+The input sample is never mutated. Output rows are sorted by price, then quantity,
+so permutations of the same input produce identical output. Empty input produces
+zero counts/quantity, absent price descriptors, and INSUFFICIENT status.
 
 ## 2. Work in log-price space for anomaly detection
 
@@ -28,14 +37,43 @@ Zero/negative/invalid prices are rejected as malformed observations.
 
 ## 3. Robust center
 
-Primary descriptive center is the median, not arithmetic mean.
+Raw and clean descriptors each contain `levelCount`, `totalQuantity`, `min`, `max`,
+`weightedMedian`, `q1` and `q3`. Prices are selected original integer copper values.
 
-Where the API aggregates commodity supply into price levels, calculate both of these after anomaly filtering:
+For sorted rows `(price_i, quantity_i)`, let `W = sum(quantity_i)` and
+`C_i = sum(quantity_1 .. quantity_i)`. The discrete weighted quantile is exactly:
 
-- **price-level median** — each distinct returned price level contributes once;
-- **quantity-weighted median** — each level is weighted by available quantity.
+```text
+Qw(p) = first price_i with C_i >= p * W
+p = 1/4 (Q1), 1/2 (median), 3/4 (Q3)
+```
 
-Use price-level behavior for anomaly detection so that one huge quantity at one absurd price does not dominate the detector. The production reference price can use the cleaned quantity-weighted median if beta data shows it behaves sensibly.
+Equality selects the current price, with no averaging/interpolation. The code
+compares cumulative integer quantities against `ceil(p*W)`. To avoid floating
+rounding near the exact-integer boundary, for `p = r/4` it computes the rank as:
+
+```text
+floor(W/4) * r + ceil((W mod 4) * r / 4), r in {1,2,3}
+```
+
+For example, prices/quantities `(100,1), (200,3), (300,6)` yield Q1=200,
+median=300 and Q3=300. `(100,1), (200,1)` yields median=100, not 150.
+
+Anomaly detection uses one observation per **distinct unitPrice**, ignoring
+quantity. Repeated returned prices remain separate raw/clean rows but contribute
+only once to detector sample size and scale; splitting a price into multiple rows
+cannot inflate confidence. No quantity-sized observation arrays are constructed.
+
+For sorted log observations `x[1..n]`, use the unweighted type-7 quantile:
+
+```text
+h = 1 + (n - 1) * p; j = floor(h); f = h - j
+Qlog(p) = x[j]                         if f = 0
+          x[j] + f * (x[j+1] - x[j])   otherwise
+```
+
+The log median and the median absolute deviation both use this rule at p=0.5.
+Only log-space metrics interpolate; copper descriptors never do.
 
 ## 4. MAD detector
 
@@ -45,16 +83,18 @@ MAD = median(abs(x - M))
 robustZ = 0.6745 * (x - M) / MAD
 ```
 
-If `MAD == 0`, do not divide by zero; fall back to IQR rules.
+MAD is usable only if `MAD > 1e-12` in natural-log units. Otherwise modified Z is
+absent (UNKNOWN), never infinite, and IQR can flag SUSPICIOUS only. This absolute
+epsilon avoids amplifying floating-point noise in a nearly flat log distribution.
 
-Initial flags:
+MP-02-v1 flags (strict comparisons):
 
 ```text
 abs(robustZ) > 3.5  => suspicious
 abs(robustZ) > 6.0  => extreme candidate
 ```
 
-These are starting thresholds, not eternal constants.
+The strong MAD flag alone never produces EXTREME.
 
 ## 5. IQR detector
 
@@ -66,51 +106,69 @@ outerLow  = Q1 - 3.0 * IQR
 outerHigh = Q3 + 3.0 * IQR
 ```
 
-Initial classification:
+Use unweighted type-7 Q1/Q3 of log prices. IQR is usable for strong classification
+only if `IQR > 1e-12`. Fence comparisons are strict; equality is inside the fence.
+
+Diagnostic flags:
 
 - outside inner fence => suspicious candidate;
 - outside outer fence => extreme candidate.
 
-When MAD and IQR disagree, preserve the reason flags. Do not erase diagnostic information.
+Every annotated level retains `modifiedZ` when usable and the booleans
+`madSuspicious`, `madExtreme`, `iqrSuspicious`, `iqrExtreme`. When IQR is degenerate,
+the collapsed fences may still flag SUSPICIOUS; they cannot authorize EXTREME.
 
 ## 6. Small-sample guard
 
 Do not pretend robust filtering is reliable on tiny markets.
 
-Initial rule:
+The old draft's 8-level guard is superseded by Issue #3's MP-02 rule:
 
 ```text
-< 8 usable price levels => no automatic exclusion; confidence LOW
+n < 5 distinct prices => anomaly.sufficient=false; status=INSUFFICIENT
+MAD <= 1e-12 or IQR <= 1e-12 => anomaly.sufficient=false; status=INSUFFICIENT
+otherwise => anomaly.sufficient=true; status=OK
 ```
 
-Observations can still be flagged for display, but the addon should not silently delete them from the market calculation solely on weak statistics.
+INSUFFICIENT still has valid raw/clean descriptors. Reason is TOO_FEW_PRICE_LEVELS
+or DEGENERATE_SCALE; an adequate model reports CURRENT_SCAN_ONLY, not calibrated
+historical confidence. Tiny/degenerate samples may be SUSPICIOUS but never EXTREME.
 
 ## 7. Clean market set
 
-For adequate sample sizes:
-
-- **extreme** observations are excluded from clean market reference calculations;
-- **suspicious** observations stay visible and are excluded from `lowestValid` when they are on the low side;
-- keep counts and reasons for every excluded/flagged level.
-
-The market panel should tell the user that anomalies were ignored rather than hiding them.
-
-## 8. Lowest valid price
-
-The raw lowest auction is not automatically the market floor.
-
-`lowestValid` is the lowest price level that survives the low-side anomaly rules. This is the value used when deciding whether a one-off undercut should be followed.
-
-Example:
+Classification is mutually exclusive and symmetric on the low/high sides:
 
 ```text
-clean market: 42s, 43s, 44s, 45s, 47s
-raw lowest:   8s
+EXTREME    if sufficient AND abs(robustZ) > 6.0 AND outside the 3.0*IQR fence
+SUSPICIOUS otherwise, if abs(robustZ) > 3.5 OR outside the 1.5*IQR fence
+NORMAL     otherwise
 ```
 
-The 8s level can be shown as anomalous while `lowestValid` remains around the normal market band.
+Clean descriptors exclude **only EXTREME** rows. SUSPICIOUS rows are retained in
+every clean calculation, including min/max, weighted quantiles and total quantity.
+Counts are mutually exclusive row counts; `anomaly.observationCount` is the distinct
+price count. Filtering is a single pass using the raw distribution's scale, with
+no iterative reclassification. Raw descriptors and the scanner sample retain all
+original normalized rows. One high-quantity extreme cannot tilt the detector and
+is removed before the clean weighted median is calculated.
 
-## 9. Snapshot history
+## 8. Current-scan limitations and integration
+
+`Statistics.Analyze(sample)` returns `modelVersion`, `status`, `raw`, `clean` and
+`anomaly` (metrics, sufficiency/reason, counts and sorted annotated primitive rows).
+Scanner calls it once after a successful result read, retains both sample and
+analysis in memory, and appends raw/clean weighted medians, suspicious/extreme
+counts and anomaly sufficiency to completion and `/mp status` output.
+
+No `lowestValid` trading rule, history, p-value, confidence score or pricing target
+is implemented. Broad/multimodal markets, several simultaneous anomalies and
+tiny/degenerate distributions may mask anomalies. Suspicious or undetected levels
+with large quantities can affect weighted descriptors because they are deliberately
+retained. Classification is evidence of an unusual current-scan price, not proof
+of manipulation or an instruction to trade. Log metrics are floating-point;
+values extremely near a strict threshold can be numerically sensitive.
+
+## 9. Snapshot history (future; not MP-02)
 
 The user is expected to scan roughly 2–3 times per day, not hourly.
 
@@ -129,7 +187,7 @@ Retention target for v1:
 - long history: daily summaries;
 - no raw auction-row archive by default.
 
-## 10. Significance
+## 10. Significance (future; not MP-02)
 
 Do not show a p-value during the first few days just because a function can calculate one.
 
@@ -143,7 +201,7 @@ Initial plan after enough history exists:
 
 A statistically significant but economically tiny move should not be labelled a meaningful market movement.
 
-## 11. Confidence
+## 11. Confidence (future; not MP-02)
 
 Confidence is separate from price direction.
 
@@ -166,7 +224,7 @@ HIGH
 
 Do not expose false precision such as `93.7% confidence` unless a calibrated model is later developed.
 
-## 12. Outputs
+## 12. Planned broader outputs (future; not MP-02)
 
 Statistics should return facts, not trading commands:
 

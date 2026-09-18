@@ -57,6 +57,21 @@ Small read-only presentation layer for scan state, market values, confidence, an
 
 ## Dependency direction
 
+Implemented through MP-02:
+
+```text
+Core -> Scanner -> AuctionAPI
+                -> Statistics
+```
+
+`Items` still contains only the configured Copper Ore ID. Statistics is a pure
+`Analyze(sample)` function returning raw/clean descriptors and log-price anomaly
+diagnostics. Scanner keeps the original normalized sample and a separate analysis
+in memory, calls analysis once per completed scan, and clears both on reset.
+The MP-02-v1 formulas/thresholds are specified in `MARKET_MODEL.md`.
+
+The broader graph below remains a future plan; MP-02 has no Database, Pricing or UI:
+
 ```text
 Core
  ├─ Scanner ──> AuctionAPI

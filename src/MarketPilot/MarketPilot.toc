@@ -1,10 +1,11 @@
 ## Interface: 16001
 ## Title: MarketPilot
-## Notes: MP-01 single-item commodity scanner for Forever beta
+## Notes: MP-02 single-item commodity statistics for Forever beta
 ## Author: Kivanc / MarketPilot
-## Version: 0.1.0
+## Version: 0.2.0
 
 Items.lua
 AuctionAPI.lua
+Statistics.lua
 Scanner.lua
 Core.lua

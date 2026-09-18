@@ -81,7 +81,7 @@ local function test(name, run)
 end
 
 test("TOC order and static production boundaries", function()
-    assert(table.concat(files, ",") == "Items.lua,AuctionAPI.lua,Scanner.lua,Core.lua")
+    assert(table.concat(files, ",") == "Items.lua,AuctionAPI.lua,Statistics.lua,Scanner.lua,Core.lua")
     assert(not toc:find("SavedVariables", 1, true))
     for _, name in ipairs(files) do
         local source = read(ROOT .. name)
@@ -307,6 +307,39 @@ test("event registration failure blocks scanning with visible error", function()
     end)
     f:start(); f:command("status")
     assert(f.scanner.state == "ERROR" and f.sent == 0 and f:has("fixture unavailable event"))
+end)
+
+test("statistics runs once per completion and status retains compact analysis", function()
+    local f = fixture()
+    local calls, analyze = 0, f.mp.Statistics.Analyze
+    f.mp.Statistics.Analyze = function(value) calls = calls + 1; return analyze(value) end
+    f:start()
+    assert(f.scanner.analysis == nil)
+    f:complete(); f:complete(); f:command("status")
+    assert(calls == 1 and f.scanner.analysis.status == "INSUFFICIENT")
+    assert(f:has("rawMedian=200 cleanMedian=200 suspicious=0 extreme=0 anomalySufficient=no"))
+    assert(#f.scanner.sample.priceLevels == 2)
+    f:command("scan")
+    assert(f.scanner.analysis == nil)
+    f:complete()
+    assert(calls == 2)
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.scanner.analysis == nil)
+end)
+
+test("scanner retains raw absurd level while clean statistics exclude it", function()
+    local f = fixture()
+    f.rows = {}
+    for price = 8000, 12000, 500 do f.rows[#f.rows + 1] = { unitPrice = price, quantity = 20 } end
+    f.rows[#f.rows + 1] = { unitPrice = 1000000000, quantity = 1000000 }
+    f:start(); f:complete()
+    assert(f.scanner.state == "DONE" and #f.scanner.sample.priceLevels == 10)
+    assert(f.scanner.analysis.raw.weightedMedian == 1000000000)
+    assert(f.scanner.analysis.clean.weightedMedian == 10000)
+    assert(f:has("rawMedian=1000000000 cleanMedian=10000 suspicious=0 extreme=1 anomalySufficient=yes"))
+    f.rows[1].quantity = 0
+    f:command("scan"); f:complete()
+    assert(f.scanner.state == "ERROR" and f.scanner.analysis == nil)
 end)
 
 print("PASS " .. passed .. " production offline tests (Lua 5.1); beta validation still required")

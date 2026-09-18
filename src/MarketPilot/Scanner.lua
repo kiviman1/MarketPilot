@@ -15,6 +15,7 @@ end
 
 function Scanner:Summary()
     local summary = self.summary
+    local analysis = self.analysis
     local function number(value)
         return value ~= nil and string.format("%.0f", value) or "UNKNOWN"
     end
@@ -24,10 +25,16 @@ function Scanner:Summary()
         .. " totalQuantity=" .. number(summary and summary.totalQuantity)
         .. " lowestUnitPrice=" .. number(summary and summary.lowest)
         .. " highestUnitPrice=" .. number(summary and summary.highest)
+        .. " rawMedian=" .. number(analysis and analysis.raw.weightedMedian)
+        .. " cleanMedian=" .. number(analysis and analysis.clean.weightedMedian)
+        .. " suspicious=" .. number(analysis and analysis.anomaly.suspiciousCount)
+        .. " extreme=" .. number(analysis and analysis.anomaly.extremeCount)
+        .. " anomalySufficient=" .. (analysis and (analysis.anomaly.sufficient and "yes" or "no") or "UNKNOWN")
         .. " (copper/unit)" .. (self.error and " error=" .. self.error or "")
 end
 
 function Scanner:Fail(reason)
+    self.analysis = nil
     self.state, self.sample, self.summary = "ERROR", nil, nil
     self.error = reason
     self.notify(self:Summary())
@@ -39,6 +46,7 @@ function Scanner:OnHouseOpened()
 end
 
 function Scanner:OnHouseClosed()
+    self.analysis = nil
     self.ahOpen = false
     self.state, self.sample, self.summary, self.error = "IDLE", nil, nil, nil
     self.notify("AH closed; scan cancelled/reset. " .. self:Summary())
@@ -50,6 +58,7 @@ function Scanner:Start()
         return
     end
     self.sample, self.summary, self.error = nil, nil, nil
+    self.analysis = nil
     if not self.ahOpen then self:Fail("AH is closed; open it before /mp scan"); return end
     local available, err = self.api:IsAvailable()
     if not available then self:Fail(err); return end
@@ -96,6 +105,9 @@ function Scanner:OnCommodityResults(itemID)
         summary.highest = summary.highest and math.max(summary.highest, level.unitPrice) or level.unitPrice
     end
     self.sample = { itemID = self.itemID, capturedAt = self.clock(), priceLevels = levels }
+    local analysis, analysisError = MP.Statistics.Analyze(self.sample)
+    if not analysis then self:Fail(analysisError); return end
+    self.analysis = analysis
     self.summary, self.error, self.state = summary, nil, "DONE"
     self.notify(self:Summary())
 end
