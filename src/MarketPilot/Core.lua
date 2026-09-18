@@ -4,15 +4,27 @@ local function debug(message)
     print("|cff66ccffMarketPilot:|r " .. message:gsub("|", "||"))
 end
 
-local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, debug, time)
+local panel
+local function notify(message)
+    debug(message)
+    if panel then panel:Guard(panel.Update) end
+end
+local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, notify, time)
 MP.scanner = scanner
+panel = MP.UI.New(scanner, MP.Items, debug)
+MP.panel = panel
 local frame = CreateFrame("Frame")
 local startupError
 
-local function onEvent(event, itemID)
+local function onEvent(event, itemID, success)
+    if event == "GET_ITEM_INFO_RECEIVED" then panel:Guard(panel.MetadataReceived, itemID, success); return end
+    if event == "ADDON_LOADED" then
+        if scanner.ahOpen and not panel.anchor then panel:Open() end
+        return
+    end
     if startupError then return end
-    if event == "AUCTION_HOUSE_SHOW" then scanner:OnHouseOpened()
-    elseif event == "AUCTION_HOUSE_CLOSED" then scanner:OnHouseClosed()
+    if event == "AUCTION_HOUSE_SHOW" then scanner:OnHouseOpened(); panel:Open()
+    elseif event == "AUCTION_HOUSE_CLOSED" then scanner:OnHouseClosed(); panel:Close()
     elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then scanner:OnReady()
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID) end
 end
@@ -29,8 +41,14 @@ for _, event in ipairs({
     local ok, err = pcall(frame.RegisterEvent, frame, event)
     if not ok or err == false then
         startupError = "UNKNOWN: cannot register " .. event .. ": " .. tostring(err)
+        scanner.blockedReason = startupError
         scanner:Fail(startupError)
     end
+end
+
+for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ADDON_LOADED" }) do
+    local ok, err = pcall(frame.RegisterEvent, frame, event)
+    if not ok or err == false then debug("optional panel event unavailable: " .. event .. " " .. tostring(err)) end
 end
 
 SLASH_MARKETPILOT1 = "/mp"
@@ -41,9 +59,9 @@ SlashCmdList.MARKETPILOT = function(input)
             if startupError then debug(startupError); return end
             scanner:Start()
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status (configured itemID=" .. MP.Items.testItemID .. ")") end
+        else debug("commands: /mp scan | /mp status (selected itemID=" .. scanner.itemID .. ")") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end
 
-debug("loaded; open AH, then /mp scan. /mp status shows current in-memory state")
+debug("loaded; open AH and click a MarketPilot item. /mp status remains available for debugging")

@@ -1,11 +1,13 @@
 ## Interface: 16001
 ## Title: MarketPilot
-## Notes: MP-02 single-item commodity statistics for Forever beta
+## Notes: MP-03 Auction House market browsing panel for Forever beta
 ## Author: Kivanc / MarketPilot
-## Version: 0.2.0
+## Version: 0.3.0
 
 Items.lua
 AuctionAPI.lua
 Statistics.lua
 Scanner.lua
+UIViewModel.lua
+UI.lua
 Core.lua

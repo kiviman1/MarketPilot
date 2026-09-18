@@ -53,24 +53,44 @@ Owns account-wide persistence, schema versioning, compact snapshots, retention, 
 Consumes current statistics plus history and produces reference outputs such as market value, lowest valid price, and optional fast/normal/patient targets. It must expose insufficient-data states rather than invent confidence.
 
 ### UI.lua
-Small read-only presentation layer for scan state, market values, confidence, and history age. UI never sends AH queries directly.
+Owns a separate AH side panel and item/refresh click handlers. It requests scans
+through Scanner and consumes the stored sample/analysis; it never calls the AH
+API or recalculates statistics. `UIViewModel.lua` maps scanner state to display
+fields and formats integer copper, separately from native frame creation.
 
 ## Dependency direction
 
-Implemented through MP-02:
+Implemented through MP-03:
 
 ```text
 Core -> Scanner -> AuctionAPI
                 -> Statistics
+     -> UI -> Scanner (manual item/refresh requests)
+           -> UIViewModel (presentation only)
 ```
 
-`Items` still contains only the configured Copper Ore ID. Statistics is a pure
+`Items` contains a small Mining/Herbalism/Skinning ID catalogue and cached client
+display metadata. Copper Ore remains the default and the confirmed commodity.
+Statistics is a pure
 `Analyze(sample)` function returning raw/clean descriptors and log-price anomaly
 diagnostics. Scanner keeps the original normalized sample and a separate analysis
 in memory, calls analysis once per completed scan, and clears both on reset.
 The MP-02-v1 formulas/thresholds are specified in `MARKET_MODEL.md`.
 
-The broader graph below remains a future plan; MP-02 has no Database, Pricing or UI:
+Core updates the panel on scanner notifications and AH lifecycle events. Metadata
+arrivals refresh cached labels/icons. There are no per-frame scripts or timers.
+The panel uses its own frame parented to the top-level `AuctionHouseFrame`, anchored
+`TOPLEFT -> TOPRIGHT` with offsets `(8, 0)`. No Blizzard child frames are accessed
+or hooked. Missing anchors/rendering errors hide the panel and emit a diagnostic;
+scanner debugging remains available. Collapse hides only our body. AH close hides
+the whole panel and resets the scan. Sale Assistant is static MP-04 placeholder text.
+
+External source references (not evidence of Forever compatibility):
+[Blizzard AH frame source mirror](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AuctionHouseUI/Shared/Blizzard_AuctionHouseFrame.xml)
+and [client item API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/ItemDocumentation.lua).
+Actual frame availability/layout and metadata behavior remain an in-client check.
+
+The broader graph below remains a future plan; MP-03 has no Database or Pricing:
 
 ```text
 Core

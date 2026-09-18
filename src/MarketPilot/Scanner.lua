@@ -52,10 +52,19 @@ function Scanner:OnHouseClosed()
     self.notify("AH closed; scan cancelled/reset. " .. self:Summary())
 end
 
-function Scanner:Start()
+function Scanner:IsActive()
+    return ACTIVE[self.state] == true
+end
+
+function Scanner:Start(itemID)
     if ACTIVE[self.state] then
         self.notify("scan already pending; no additional query. " .. self:Summary())
         return
+    end
+    if self.blockedReason then self:Fail(self.blockedReason); return end
+    if itemID ~= nil then
+        if not MP.Items.Contains(itemID) then self:Fail("UNKNOWN: item is not configured"); return end
+        self.itemID = itemID
     end
     self.sample, self.summary, self.error = nil, nil, nil
     self.analysis = nil
@@ -92,6 +101,7 @@ function Scanner:OnCommodityResults(itemID)
         return
     end
     self.state = "COLLECTING"
+    self.notify("collecting commodity results. " .. self:Summary())
     local levels, err = self.api:ReadCommodityResults(self.itemID)
     if not levels then self:Fail(err); return end
     local summary = { levelCount = #levels, totalQuantity = 0 }

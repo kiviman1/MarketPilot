@@ -130,3 +130,24 @@ total quantity 472, lowest unit price 199 copper and highest unit price 200 copp
 The live AH UI at the same moment matched those values. Closing the AH reset the
 scanner to IDLE; reopening and scanning again incremented the session query count
 by exactly one.
+
+## MP-02 production validation — CONFIRMED
+
+2026-09-18 (user report received): MP-02 was tested in the real Forever beta
+client. Reported current-scan outputs:
+
+| Scan | Levels | Total quantity | Lowest | Highest | Raw median | Clean median | Suspicious | Extreme | Anomaly sufficient |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 4 | 735 | 170 | 200 | 200 | 200 | 0 | 0 | no |
+| 2 | 4 | 775 | 170 | 200 | 199 | 199 | 0 | 0 | no |
+
+Prices are copper per unit. The insufficient classification with four price
+levels is expected and was confirmed in-client. Per-level quantities were not
+provided; do not reconstruct them from these aggregate observations.
+
+## MP-03 validation — UNKNOWN / pending
+
+The side panel, top-level `AuctionHouseFrame` anchor, client item metadata lookup,
+screen fit and click-driven browsing have not yet been observed in Forever beta.
+Additional configured item IDs beyond Copper Ore have not been confirmed as
+commodity queries. Offline frame fixtures do not confirm these client behaviors.
