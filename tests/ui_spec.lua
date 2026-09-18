@@ -518,7 +518,7 @@ local function same(actual, expected)
     for key, v in pairs(expected) do same(actual[key], v) end
     for key in pairs(actual) do assert(expected[key] ~= nil) end
 end
-local function watchFixture(configure)
+local function watchFixture(configure, beforeLogin)
     local bank = fixture(); bank:event("ADDON_LOADED", "MarketPilot")
     seed(bank, 2770, { 30 * DAY, 29 * DAY, DAY, 0 }, { 200, 200, 200, 100 })
     seed(bank, 2447, { 0 }, { 27 })
@@ -538,7 +538,9 @@ local function watchFixture(configure)
         end
     end
     function f:watch() self.env.SlashCmdList.MARKETPILOT("watch") end
-    f:event("ADDON_LOADED", "MarketPilot"); f:event("PLAYER_LOGIN")
+    f:event("ADDON_LOADED", "MarketPilot")
+    if beforeLogin then beforeLogin(f) end
+    f:event("PLAYER_LOGIN")
     return f
 end
 
@@ -667,6 +669,107 @@ test("lazy AH frame can dock existing standalone after addon-loaded and return s
     assert(panel:IsVisible() and panel.parent == f.env.AuctionHouseFrame and f.panel.mode == "AH")
     f:event("AUCTION_HOUSE_CLOSED")
     assert(panel:IsVisible() and panel.parent == f.env.UIParent and f.panel.mode == "STANDALONE" and f.ahCalls == 0)
+end)
+
+test("successful early identity A rebinds to persisted stable identity B at login", function()
+    local root, before
+    local f = watchFixture(function(f) f.env.GetRealmName = function() return "Early Realm" end end, function(f)
+        root = f.env.MarketPilotDB; before = clone(root)
+        assert(f.mp.market.db.status == "OK" and f.mp.market.db.key ~= f.bankKey)
+        f:watch(); assert(f.panel.rows[2770].columns.now.text == "?")
+        f.env.GetRealmName = function() return "Fixture Realm" end
+    end)
+    assert(f.mp.market.db.key == f.bankKey, "successful early key must not override stable identity")
+    assert(f.panel.rows[2770].columns.now.text == "1s0c" and f.panel.view.cleanMedian == "0g 1s 0c")
+    assert(f.mp.market:Get(2770).current.t == f.mp.market.db:History(2770)[4].t)
+    assert(f.env.MarketPilotDB == root and f.ahCalls == 0 and #f.sent == 0)
+    same(root, before)
+end)
+
+test("entering-world rebind clears partition-local overlays without deleting either history", function()
+    local f = watchFixture(function(f)
+        f.env.GetRealmName = function() return "Early Realm" end
+        f.env.UnitFactionGroup = function() return "Horde" end
+    end)
+    seed(f, 2770, { 0 }, { 999 })
+    local market, root, sample = f.mp.market, f.env.MarketPilotDB, {}
+    market.latest[2770], market.errors[2770], market.scanTimes[2770] = snapshot(f.now, 999), "old partition error", f.now
+    market.lastSample = sample
+    f:watch(); assert(market:Get(2770).current.cleanMedian == 999)
+    local before, oldCache = clone(root), market.cache
+    f.now = f.now + 61 * DAY -- Rebinding must not run retention on either partition.
+    f.env.GetRealmName = function() return "Fixture Realm" end
+    f.env.UnitFactionGroup = function() return "Alliance" end
+    f:event("PLAYER_ENTERING_WORLD")
+    assert(market.db.key == f.bankKey and market.cache ~= oldCache and market.db.root == root)
+    assert(next(market.latest) == nil and next(market.errors) == nil and next(market.scanTimes) == nil)
+    assert(market:Get(2770).current.cleanMedian == 100 and f.panel.rows[2770].columns.now.text == "1s0c")
+    assert(market.lastSample == sample)
+    market:Record({ state = "DONE", itemID = 2770, sample = sample })
+    same(root, before); assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("same stable identity revalidation neither reopens DB nor clears current caches", function()
+    local f = watchFixture(); f:watch()
+    local market, before = f.mp.market, clone(f.env.MarketPilotDB)
+    local db, cache = market.db, market.cache
+    local calls = 0
+    f.mp.Database.Open = function() calls = calls + 1; error("unchanged key reopened DB") end
+    f:event("PLAYER_LOGIN"); f:event("PLAYER_ENTERING_WORLD")
+    assert(calls == 0 and market.db == db and market.cache == cache and f.ahCalls == 0)
+    same(f.env.MarketPilotDB, before)
+end)
+
+test("batch saved root survives reload and main login with early-to-stable key changes", function()
+    local bank = fixture(); bank:open(); bank.panel.batchButton:Click()
+    for _, id in ipairs(bank.mp.Items.List()) do bank:complete(id) end
+    assert(bank.mp.batch.state == "DONE" and #bank.sent == 5)
+    local saved, bankKey = clone(bank.env.MarketPilotDB), bank.mp.market.db.key
+    for _, character in ipairs({ "BankAlt", "MainCharacter" }) do
+        local f = watchFixture(function(f)
+            f.env.MarketPilotDB = clone(saved)
+            -- Both partitions already exist, so equality catches any mutation.
+            f.env.MarketPilotDB.markets["forever-beta:v1:11:Early Realm:8:Alliance"] = { items = {} }
+            f.character = character
+            f.env.GetRealmName = function() return "Early Realm" end
+        end, function(f) f.env.GetRealmName = function() return "Fixture Realm" end end)
+        local before = clone(f.env.MarketPilotDB)
+        assert(f.mp.market.db.key == bankKey and f.scanner.sample == nil and next(f.mp.market.latest) == nil)
+        f:watch()
+        for _, id in ipairs(f.mp.Items.List()) do
+            local history = f.mp.market.db:History(id)
+            assert(#history == 1 and f.mp.market:Get(id).current.cleanMedian == history[#history].cleanMedian)
+            assert(f.panel.rows[id].columns.now.text == bank.panel.rows[id].columns.now.text)
+        end
+        f.panel.reportButton:Click(); f:watch(); f:watch()
+        same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0 and #f.sent == 0)
+    end
+end)
+
+test("dbstatus reports persisted facts for every configured item without binding or scanning", function()
+    local f = watchFixture(); f:watch()
+    local before, n, cache = clone(f.env.MarketPilotDB), #f.output, f.mp.market.cache
+    local calls = 0
+    local function forbidden() calls = calls + 1; error("dbstatus has side effects") end
+    f.mp.Database.Open, f.scanner.Start, f.mp.market.Get = forbidden, forbidden, forbidden
+    f.mp.market.latest[2770] = snapshot(f.now, 99999) -- Debug must read persisted rows, not this overlay.
+    f.env.SlashCmdList.MARKETPILOT("dbstatus")
+    assert(#f.output == n + 1 + #f.mp.Items.List())
+    assert(f:has("db status=OK activeKey=" .. f.bankKey))
+    assert(f:has("itemID=2770 snapshots=4 latestTimestamp=4000000 latestCleanMedian=100 (copper)"))
+    assert(f:has("itemID=2447 snapshots=1 latestTimestamp=4000000 latestCleanMedian=27 (copper)"))
+    assert(f:has("itemID=2775 snapshots=0 latestTimestamp=UNKNOWN latestCleanMedian=UNKNOWN"))
+    assert(calls == 0 and f.ahCalls == 0 and f.mp.market.cache == cache and f.panel.frame:IsVisible())
+    same(f.env.MarketPilotDB, before)
+end)
+
+test("unknown schema stays intact through stable revalidation and dbstatus", function()
+    local f = watchFixture(function(f) f.env.MarketPilotDB = { schema = 99, future = { untouched = true } } end)
+    local root, before = f.env.MarketPilotDB, clone(f.env.MarketPilotDB)
+    f:event("PLAYER_ENTERING_WORLD"); f:watch(); f.env.SlashCmdList.MARKETPILOT("dbstatus")
+    assert(f.env.MarketPilotDB == root and f:has("db status=UNKNOWN activeKey=UNKNOWN"))
+    assert(f:has("itemID=2770 snapshots=UNKNOWN latestTimestamp=UNKNOWN latestCleanMedian=UNKNOWN"))
+    same(root, before); assert(f.ahCalls == 0)
 end)
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

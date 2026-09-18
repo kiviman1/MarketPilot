@@ -198,3 +198,22 @@ results, broader beta material catalogue, result completeness/paging, request
 identity and normal-item search semantics remain UNKNOWN. No sell-side APIs or
 sale workflows are introduced in this MP-03-based branch. The in-game checklist
 is in [src/README.md](../src/README.md).
+
+## MP-05 reload binding bug — user report and offline fix
+
+[Latest live bug comment, 2026-09-18](https://github.com/kiviman1/MarketPilot/issues/7#issuecomment-5727479247)
+reports successful batch -> `/reload` -> `/mp watch` showing `?` in Now instead
+of the saved current values. This is a confirmed reported symptom, not evidence
+that the snapshots were deleted. Actual early/stable identity strings and the
+saved root contents were not provided.
+
+Code review found that initializeHistory returned before recomputing identity
+whenever db.status was OK. A deterministic early-key-A -> stable-key-B fixture
+failed on that code, then passed with stable-event revalidation. The fix binds
+the existing root to the current key, invalidates partition-local cached values,
+and leaves saved history intact. `/mp dbstatus` now exposes the active key and
+stored count/latest timestamp/latest cleanMedian for each configured item.
+
+Actual corrected behavior after bank-alt reload and same-realm/faction main login
+remains UNKNOWN until the user repeats those steps in Forever beta. No new client
+API signature or cross-market sharing rule is inferred from the offline fixture.

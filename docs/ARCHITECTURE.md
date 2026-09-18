@@ -99,18 +99,29 @@ preserves saved data and reports UNKNOWN; scanning still works. Actual identity
 output and production cross-character persistence await beta validation. Changing
 sharing semantics later requires an explicit migration.
 
+An ADDON_LOADED binding is provisional even when its status is OK. Core recomputes
+the key at PLAYER_LOGIN and PLAYER_ENTERING_WORLD, and checks both key and root
+identity before reusing a binding. A changed key binds the existing root to that
+partition, clears Market's cache/latest/errors/scanTimes, and refreshes an open
+panel. Market:Get then reads `history[#history]` without a new scan. The old
+partition stays intact; no automatic merge/rename or schema migration occurs.
+The last processed sample marker is retained so an old completed scan cannot be
+recorded again into a different partition.
+
 Dedupe compares all core fields except `t` with the last stored observation:
 unchanged and less than 600 seconds apart -> no new row. Exactly 600 seconds or
 any changed core value -> store. Dedupe neither moves the retained timestamp nor
 inflates historical count. Actual last-scan time is session-only; after reload
 age refers to the last retained observation.
 
-Retention runs on open for all partitions and append for the touched item: keep
+Retention runs on initial open for all partitions and append for the touched item: keep
 at most 200 snapshots and remove timestamps older than 60 days, oldest first.
 The exact 60-day boundary is retained. No background pruning. Full schema
 validation precedes mutation. Unsupported/malformed roots are preserved without
 automatic reset/migration; history is blocked with a diagnostic. Backward clocks
-reject the append without rewriting history. Reads return detached whitelist copies.
+reject the append without rewriting history. Revalidation of an already held root
+uses Database.Open's preserveHistory option: validate/bind without pruning either
+partition. Reads return detached whitelist copies.
 
 ## Dashboard and report
 
@@ -130,9 +141,14 @@ AH close returns it to standalone only when `/mp watch` explicitly requested it;
 otherwise it hides as before. Toggling a visible window off clears this session-only
 preference. Toggling a hidden window on uses AH mode if AH is already open.
 Selection/report/collapse state survives mode changes. No automatic show after
-login/reload. Core retries early missing realm/faction identity at PLAYER_LOGIN;
+login/reload. Core revalidates realm/faction at PLAYER_LOGIN and PLAYER_ENTERING_WORLD;
 the watch command itself does not initialize the DB or run retention. Partition,
 schema and retention are unchanged.
+
+`/mp dbstatus` is a read-only debug command: DB status/active key, then configured
+item ID, stored snapshot count, latest timestamp and latest cleanMedian in copper.
+It reads Database:History directly rather than Market's session cache/overlays.
+No identity binding, retention, scan or normal UI change is triggered by the command.
 
 Watchlist: last observed clean median, 7d change, trend arrow, 30d percentile,
 supply and maturity. Selecting during batch changes detail without another query.

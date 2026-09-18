@@ -31,7 +31,7 @@ the automatic AH panel; explicitly requested watch returns to standalone.
 Reopen does not resume. A safely failed item is recorded and the batch continues.
 An ambiguous dispatch stops the batch until AH close/reopen.
 
-Debug helpers: `/mp status`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
+Debug helpers: `/mp status`, `/mp dbstatus`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
 
 ## Stored Market Watch anywhere
@@ -53,9 +53,18 @@ session-only, so use `/mp watch` again after reload or character switch.
 
 Opening/closing, selecting and reporting in standalone neither initializes nor
 writes/prunes history. Normal database initialization/retention runs at addon
-load, with a PLAYER_LOGIN retry if realm/faction was unavailable early; AH open
-retains its initialization fallback. Same-realm/same-faction characters read the
+load. PLAYER_LOGIN and PLAYER_ENTERING_WORLD revalidate realm/faction even if an
+early binding succeeded; AH open retains its initialization fallback. A changed
+key rebinds the same root without pruning or migrating stored history, clears
+partition-specific session data, and displays the last persisted snapshot.
+Same-realm/same-faction characters read the
 same account-wide partition. Database schema, key and retention rules are unchanged.
+
+For a missing `Now` value after reload, use `/mp dbstatus`: it prints DB status,
+active market key, and each configured item's snapshot count, latest timestamp and
+latest cleanMedian (integer copper, or UNKNOWN). It reads persisted data directly
+and does not scan, bind, prune, or add information to the normal panel. Early-key
+partitions remain preserved rather than being guessed to belong to another market.
 
 ## Implementation and persistence
 
@@ -136,6 +145,13 @@ fixtures mock native frames and events. They do not prove rendered beta behavior
 
 The first live MP-05 batch and first-history display were confirmed in Issue #7;
 that report does not validate the new standalone mode.
+
+Reload binding acceptance: scan on bank alt and record `Now` plus `/mp dbstatus`.
+Run `/reload` -> `/mp watch` without scanning: the same Now values, active key,
+counts and latest stored timestamps/medians should return. Then normal logout ->
+same-realm/same-faction main, away from AH -> `/mp watch` and `/mp dbstatus`: the
+same values must appear without a fresh query. This fix is verified offline only;
+return the debug output if the actual client still reports a different key/count.
 
 1. On the bank alt, scan at AH and note values/counts. Close AH, then use
    `/mp watch`: centered read-only panel, stored detail/report, scan/refresh/cancel

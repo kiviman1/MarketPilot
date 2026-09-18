@@ -39,7 +39,7 @@ local function dense(list)
     return n == #list
 end
 
-function DB.Open(root, key, now)
+function DB.Open(root, key, now, preserveHistory)
     local self = setmetatable({ root = root, key = key, status = "UNKNOWN" }, DB)
     local function reject(reason) self.error = "UNKNOWN: history " .. reason; return self end
     if type(key) ~= "string" or key == "" then return reject("identity unavailable; persistence disabled") end
@@ -62,8 +62,11 @@ function DB.Open(root, key, now)
             end
         end
     end
-    for _, market in pairs(root.markets) do
-        for _, item in pairs(market.items) do self:Prune(item.snapshots, now) end
+    -- Identity revalidation only changes the binding; retention is not a migration.
+    if not preserveHistory then
+        for _, market in pairs(root.markets) do
+            for _, item in pairs(market.items) do self:Prune(item.snapshots, now) end
+        end
     end
     root.markets[key] = root.markets[key] or { items = {} }
     self.items, self.status = root.markets[key].items, "OK"

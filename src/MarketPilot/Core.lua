@@ -21,7 +21,6 @@ local frame = CreateFrame("Frame")
 local startupError
 
 local function initializeHistory()
-    if market.db.status == "OK" then return end
     local realmOK, realm = false, nil
     local factionOK, faction = false, nil
     if type(GetRealmName) == "function" then realmOK, realm = pcall(GetRealmName) end
@@ -30,9 +29,31 @@ local function initializeHistory()
     if realmOK and factionOK and type(realm) == "string" and realm ~= "" and type(faction) == "string" and faction ~= "" then
         key = "forever-beta:v1:" .. #realm .. ":" .. realm .. ":" .. #faction .. ":" .. faction
     end
-    local db = MP.Database.Open(MarketPilotDB, key, time())
+    -- An early valid identity is provisional: only the same key/root may reuse
+    -- the binding. Rebinding must not prune or replace existing history.
+    local sameRoot = market.db.root == MarketPilotDB
+    if market.db.status == "OK" and market.db.key == key and sameRoot then return end
+    local db = MP.Database.Open(MarketPilotDB, key, time(), sameRoot)
     if db.status == "OK" then MarketPilotDB = db.root else debug(db.error) end
     market.db, market.cache = db, {}
+    market.latest, market.errors, market.scanTimes = {}, {}, {}
+    -- Keep lastSample: an old completed scan must not be recorded into a new key.
+end
+
+local function databaseStatus()
+    local db = market.db
+    local function number(value)
+        return MP.HistoryMath.Integer(value, 0) and string.format("%.0f", value) or "UNKNOWN"
+    end
+    debug("db status=" .. db.status .. " activeKey=" .. (db.status == "OK" and db.key or "UNKNOWN")
+        .. (db.error and " error=" .. db.error or ""))
+    for _, itemID in ipairs(MP.Items.List()) do
+        local history = db:History(itemID)
+        local latest = history[#history]
+        debug("itemID=" .. itemID .. " snapshots=" .. (db.status == "OK" and #history or "UNKNOWN")
+            .. " latestTimestamp=" .. number(latest and latest.t)
+            .. " latestCleanMedian=" .. number(latest and latest.cleanMedian) .. " (copper)")
+    end
 end
 
 local function advance()
@@ -42,9 +63,9 @@ end
 
 local function onEvent(event, itemID, success)
     if event == "GET_ITEM_INFO_RECEIVED" then panel:Guard(panel.MetadataReceived, itemID, success); return end
-    -- Realm/faction may be unavailable at ADDON_LOADED; bind history before any
-    -- watch interaction at login. Opening/closing watch never initializes/writes DB.
-    if event == "PLAYER_LOGIN" then
+    -- Revalidate even a successful early binding against stable player identity.
+    -- Watch/dbstatus themselves never initialize or write history.
+    if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         initializeHistory()
         if panel.anchor then panel:Guard(panel.Update) end
         return
@@ -79,7 +100,7 @@ for _, event in ipairs({
     end
 end
 
-for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ADDON_LOADED", "PLAYER_LOGIN" }) do
+for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ADDON_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD" }) do
     local ok, err = pcall(frame.RegisterEvent, frame, event)
     if not ok or err == false then debug("optional panel event unavailable: " .. event .. " " .. tostring(err)) end
 end
@@ -99,8 +120,9 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "cancel" then batch:Cancel(); panel:Guard(panel.Update)
         elseif command == "report" then panel:Guard(panel.ToggleReport)
         elseif command == "watch" then panel:Guard(panel.ToggleWatch)
+        elseif command == "dbstatus" then databaseStatus()
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp batch | /mp cancel | /mp report | /mp watch") end
+        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp batch | /mp cancel | /mp report | /mp watch") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end
