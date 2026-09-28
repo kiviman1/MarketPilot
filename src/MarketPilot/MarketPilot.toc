@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: MarketPilot
-## Notes: MP-05 gathering market intelligence for Forever beta
+## Notes: Gathering market analysis, price history, and trends for Mining, Herbalism, and Skinning.
 ## Author: Kivanc / MarketPilot
-## Version: 0.5.4
+## Version: 0.5.5
 ## IconTexture: Interface\AddOns\MarketPilot\Media\Icon.tga
 ## SavedVariables: MarketPilotDB
 

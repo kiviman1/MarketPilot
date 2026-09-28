@@ -25,6 +25,10 @@ local function fixture(configure)
         function w:SetWordWrap(value) self.wrap = value end
         function w:SetMovable(value) self.movable = value end
         function w:SetFrameStrata(value) self.strata = value end
+        function w:GetFrameStrata() return self.strata or (self.parent and self.parent:GetFrameStrata()) or "MEDIUM" end
+        function w:SetFrameLevel(value) self.level = value end
+        function w:GetFrameLevel() return self.level or (self.parent and self.parent:GetFrameLevel() + 1) or 0 end
+        function w:SetFixedFrameLevel(value) self.fixedLevel = value end
         function w:SetClampedToScreen(value) self.clamped = value end
         function w:EnableMouse(value) self.mouse = value end
         function w:Enable() self.enabled = true end
@@ -267,5 +271,19 @@ test("settings reads all persisted preferences when opened and refresh never wri
     assert(f.window.scaleValue.text == "90%" and f.window.categoryButton.text == "Herbalism >")
     assert(f.window.lockCheckbox.checked and f.window.debugCheckbox.checked and not f.window.checkbox.checked)
     assert(f.root.preferences.minimapAngle == nil and f.root.preferences.settingsPosition == nil and #f.changed == 0)
+end)
+test("settings restores its normal dialog layer on reopen with children above its background", function()
+    local f = fixture(); f.window:Toggle()
+    local panel = f.window.frame
+    assert(panel:GetFrameStrata() == "DIALOG" and panel:GetFrameLevel() == 200 and panel.fixedLevel)
+    for _, control in ipairs({ f.window.titleHandle, f.window.closeButton, f.window.scaleMinus,
+        f.window.scalePlus, f.window.categoryButton, f.window.checkbox, f.window.resetButton }) do
+        assert(control:GetFrameStrata() == "DIALOG" and control:GetFrameLevel() > panel:GetFrameLevel())
+    end
+    f.window.closeButton:Click()
+    panel.strata, panel.level = "MEDIUM", 1 -- A window-level reset must not survive reopening.
+    f.window:Toggle()
+    assert(panel:GetFrameStrata() == "DIALOG" and panel:GetFrameLevel() == 200 and panel.fixedLevel)
+    assert(f.root.preferences == nil and f.root.markets.untouched and f.watch == 0)
 end)
 print("PASS " .. passed .. " launcher/settings offline tests (Lua 5.1)")

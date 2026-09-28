@@ -22,13 +22,20 @@ local function fixture(configure)
         function w:GetName() return self.name end
         function w:GetParent() return self.parent end
         function w:GetPoint() if self.point then return unpack(self.point) end end
-        function w:SetParent(parent) self.parent = parent end
+        function w:SetParent(parent)
+            self.parent, self.strata = parent, nil
+            if not self.fixedLevel then self.level = nil end
+        end
         function w:SetMovable(value) self.movable = value end
         function w:StartMoving() assert(self.movable); self.moving = true end
         function w:StopMovingOrSizing() self.moving = false; self.stops = (self.stops or 0) + 1 end
         function w:RegisterForDrag(...) self.dragButtons = { ... } end
         function w:RegisterForClicks(...) self.clickButtons = { ... } end
         function w:SetFrameStrata(value) self.strata = value end
+        function w:GetFrameStrata() return self.strata or (self.parent and self.parent:GetFrameStrata()) or "MEDIUM" end
+        function w:SetFrameLevel(value) self.level = value end
+        function w:GetFrameLevel() return self.level or (self.parent and self.parent:GetFrameLevel() + 1) or 0 end
+        function w:SetFixedFrameLevel(value) self.fixedLevel = value end
         function w:GetWidth() return self.width or 0 end
         function w:GetHeight() return self.height or 0 end
         function w:SetScale(value) self.scale = value end
@@ -1444,6 +1451,94 @@ test("debug setting and slash command stay synchronized and survive reload witho
     f.output = {}; f.panel.scan:Click()
     assert(not f:has("one query sent"))
     same(f.env.MarketPilotDB.markets, history)
+end)
+
+local strataPriority = { BACKGROUND = 1, LOW = 2, MEDIUM = 3, HIGH = 4, DIALOG = 5, FULLSCREEN = 6, FULLSCREEN_DIALOG = 7, TOOLTIP = 8 }
+local function above(a, b)
+    local x, y = strataPriority[a:GetFrameStrata()], strataPriority[b:GetFrameStrata()]
+    return x > y or (x == y and a:GetFrameLevel() > b:GetFrameLevel())
+end
+local function descendant(widget, parent)
+    while widget do if widget == parent then return true end; widget = widget.parent end
+    return false
+end
+
+test("watch uses dialog ordering above high-level HUD frames without promoting foreign frames", function()
+    local f = watchFixture(); local before = clone(f.env.MarketPilotDB)
+    local bars = f.env.CreateFrame("Frame", nil, f.env.UIParent)
+    bars:SetFrameStrata("MEDIUM"); bars:SetFrameLevel(10000)
+    local unit = f.env.CreateFrame("Frame", nil, f.env.UIParent)
+    unit:SetFrameStrata("HIGH"); unit:SetFrameLevel(20000)
+    f:watch()
+    assert(f.panel.frame:GetFrameStrata() == "DIALOG" and f.panel.frame:GetFrameLevel() == 100)
+    assert(f.panel.frame.fixedLevel and above(f.panel.frame, bars) and above(f.panel.frame, unit))
+    for _, object in ipairs(f.objects) do
+        if descendant(object, f.panel.frame) then
+            assert(object:GetFrameStrata() == "DIALOG")
+            assert(object:GetFrameLevel() >= 100 and object:GetFrameLevel() < 200)
+        end
+    end
+    assert(above(f.panel.scan, f.panel.frame) and above(f.panel.closeButton, f.panel.frame))
+    assert(bars:GetFrameStrata() == "MEDIUM" and bars:GetFrameLevel() == 10000)
+    assert(unit:GetFrameStrata() == "HIGH" and unit:GetFrameLevel() == 20000)
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
+end)
+
+test("watch reapplies the same window layer after AH reparent and standalone reopen", function()
+    local f = watchFixture(); f:watch(); f.makeAnchor()
+    local before = clone(f.env.MarketPilotDB)
+    f.env.AuctionHouseFrame:SetFrameStrata("HIGH"); f.env.AuctionHouseFrame:SetFrameLevel(10000)
+    for _ = 1, 3 do
+        f:open()
+        assert(f.panel.mode == "AH" and f.panel.frame.parent == f.env.AuctionHouseFrame)
+        assert(f.panel.frame:GetFrameStrata() == "DIALOG" and f.panel.frame:GetFrameLevel() == 100)
+        assert(above(f.panel.frame, f.env.AuctionHouseFrame) and above(f.panel.scan, f.panel.frame))
+        local p = f.panel.frame.point
+        assert(p[1] == "TOPLEFT" and p[2] == f.env.AuctionHouseFrame and p[3] == "TOPRIGHT" and p[4] == 8 and p[5] == 0)
+        f:event("AUCTION_HOUSE_CLOSED")
+        assert(f.panel.mode == "STANDALONE" and f.panel.frame.parent == f.env.UIParent)
+        assert(f.panel.frame:GetFrameStrata() == "DIALOG" and f.panel.frame:GetFrameLevel() == 100)
+        assert(f.panel.frame.fixedLevel and f.panel.scan:GetFrameStrata() == "DIALOG")
+    end
+    assert(f.env.AuctionHouseFrame:GetFrameStrata() == "HIGH" and f.env.AuctionHouseFrame:GetFrameLevel() == 10000)
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("settings stays above every watch child in either opening order and during AH transitions", function()
+    for _, settingsFirst in ipairs({ true, false }) do
+        local f = watchFixture(); local before = clone(f.env.MarketPilotDB)
+        if settingsFirst then f.env.SlashCmdList.MARKETPILOT("settings") end
+        f:watch()
+        if not settingsFirst then f.panel.settingsButton:Click() end
+        local settings = f.mp.settings.frame
+        local function ordered()
+            assert(settings:IsVisible() and settings:GetFrameStrata() == "DIALOG" and settings:GetFrameLevel() == 200)
+            for _, object in ipairs(f.objects) do
+                if descendant(object, f.panel.frame) then assert(above(settings, object)) end
+            end
+            assert(above(f.mp.settings.checkbox, settings) and above(f.mp.settings.closeButton, settings))
+        end
+        ordered()
+        f:watch(); f:watch(); ordered()
+        f.makeAnchor(); f:open(); ordered()
+        f:event("AUCTION_HOUSE_CLOSED"); ordered()
+        f.mp.settings.closeButton:Click(); f.panel.settingsButton:Click(); ordered()
+        same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0 and #f.sent == 0)
+    end
+end)
+
+test("explicit dialog levels also work when the optional fixed-level API is unavailable", function()
+    local f = watchFixture(function(g)
+        local create = g.env.CreateFrame
+        g.env.CreateFrame = function(...)
+            local frame = create(...); frame.SetFixedFrameLevel = nil; return frame
+        end
+    end)
+    f:watch(); f.env.SlashCmdList.MARKETPILOT("settings")
+    assert(f.panel.frame:GetFrameStrata() == "DIALOG" and f.panel.frame:GetFrameLevel() == 100)
+    assert(f.mp.settings.frame:GetFrameStrata() == "DIALOG" and f.mp.settings.frame:GetFrameLevel() == 200)
+    f.makeAnchor(); f:open(); assert(above(f.mp.settings.frame, f.panel.scan))
+    assert(f.ahCalls == 0 and #f.sent == 0)
 end)
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

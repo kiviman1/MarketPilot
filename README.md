@@ -1,9 +1,9 @@
 # MarketPilot
 
-Private, lightweight WoW Forever market-intelligence terminal for Mining,
+Lightweight WoW Forever market-intelligence addon for Mining,
 Herbalism and Skinning commodities.
 
-## MP-05 — gathering market watch (0.5.4, release preparation)
+## Market Watch (0.5.5)
 
 Starting from the validated MP-03 side panel:
 
@@ -28,7 +28,8 @@ category, lock window positions, toggle detailed scan logs, hide/show the icon,
 or reset window positions. Scroll with the mouse wheel; redundant Up/Down buttons
 have been removed. The named launcher supports the installed EllesmereUI icon
 container and leaves its layout under that container's control.
-AH opens the usual attached scan panel; closing AH returns an explicitly opened
+Market Watch renders above normal action bars and unit frames, with Settings above
+the watch. AH opens the usual attached scan panel; closing AH returns an explicitly opened
 watch to its saved standalone position. No login/background scan starts automatically.
 
 Runtime demo mode has been removed. Synthetic month-long market scenarios remain
@@ -41,6 +42,9 @@ Missing prices never become zero. Technical state names remain in debug output.
 Install the complete `src/MarketPilot/` folder, including `Media/Icon.tga`, into
 the client's `Interface/AddOns/`. This revision prepares source only: no new
 build/package or release is produced pending the user's final client experiment.
+The upload logo is [assets/MarketPilot-CurseForge.png](assets/MarketPilot-CurseForge.png),
+a 512 x 512 PNG exported from the addon's own vector mark. Recreate it without an
+addon build using `python tools/render_icon.py --png-only --size 512 <output.png>`.
 See [production instructions and beta checklist](src/README.md),
 [architecture/schema](docs/ARCHITECTURE.md), [exact model](docs/MARKET_MODEL.md),
 and [confirmed versus unknown beta behavior](docs/API_FINDINGS.md).

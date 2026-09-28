@@ -4,6 +4,7 @@ Settings.__index = Settings
 MP.Settings = Settings
 local SCALES = { 0.8, 0.9, 1, 1.1, 1.2 }
 local CATEGORIES = { "All", "Mining", "Herbalism", "Skinning" }
+local WINDOW_LEVEL = 200 -- Above Market Watch and its child controls, within the normal dialog layer.
 
 function Settings.New(preferences, callbacks, report)
     return setmetatable({ preferences = preferences, callbacks = callbacks or {}, report = report or function() end }, Settings)
@@ -19,6 +20,12 @@ function Settings:Guard(callback, ...)
         self.report("Settings unavailable: " .. tostring(err))
     end
     return ok
+end
+function Settings:ApplyWindowLayer()
+    if self.frame.SetFixedFrameLevel then self.frame:SetFixedFrameLevel(false) end
+    self.frame:SetFrameStrata("DIALOG")
+    self.frame:SetFrameLevel(WINDOW_LEVEL)
+    if self.frame.SetFixedFrameLevel then self.frame:SetFixedFrameLevel(true) end
 end
 function Settings:StopDrag()
     if not self.dragging then return end
@@ -75,7 +82,7 @@ function Settings:Create()
     local panel = CreateFrame("Frame", nil, UIParent)
     self.frame = panel
     panel:Hide(); panel:SetSize(330, 325); panel:EnableMouse(true); panel:SetMovable(true)
-    if panel.SetFrameStrata then panel:SetFrameStrata("DIALOG") end
+    self:ApplyWindowLayer()
     MP.Preferences.ApplyPosition(panel, UIParent, self.preferences:Get("settingsPosition"))
     local background = panel:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints(panel); background:SetColorTexture(0.035, 0.045, 0.06, 0.98)
@@ -139,6 +146,6 @@ function Settings:Toggle()
     return self:Guard(function(s)
         if not s.frame then s:Create() end
         if s.frame:IsShown() then s:StopDrag(); s.frame:Hide()
-        else s:Refresh(); s.frame:Show() end
+        else s:Refresh(); s:ApplyWindowLayer(); s.frame:Show() end
     end)
 end

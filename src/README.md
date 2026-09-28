@@ -263,7 +263,7 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.4 (no release build yet)
+## In-game acceptance for 0.5.5 (no release build yet)
 
 No release package/tag is created in this follow-up. CI validates the source
 manifest without producing a ZIP. A further user experiment is pending.
@@ -289,6 +289,12 @@ manifest without producing a ZIP. A further user experiment is pending.
    reload retains these preferences without altering stored prices/counts.
 8. Up/Down buttons are gone. Mouse wheel reaches all Current/History details
    and the bottom of Market Report at each size.
+9. Place standalone Watch over the action bars and player frame: its contents and
+   buttons should remain in front. Open Settings, then reopen Watch: Settings
+   should remain on top. Repeat after AH docking/closing and scale changes.
+10. The addon-selection description contains the general gathering-analysis
+    description without milestone/beta branding. Fully restart the client if its
+    cached metadata still shows an earlier version/description.
 
 The original five-item batch and post-reload database retention were confirmed.
 The expanded 56-item batch and the new launcher/settings/drag behavior need a

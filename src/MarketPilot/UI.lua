@@ -5,6 +5,7 @@ MP.UI = UI
 
 local WIDTH, HEIGHT = 440, 650
 local PAGE_SIZE = 6
+local WINDOW_LEVEL = 100 -- Normal dialog layer; Settings uses a separate level above this tree.
 local FIELDS = {
     { "Current lowest", "lowest" }, { "Raw median", "rawMedian" },
     { "Clean median", "cleanMedian" }, { "Clean Q1-Q3", "range" },
@@ -42,6 +43,13 @@ end
 function UI:Toggle()
     self.collapsed = not self.collapsed
     self:Update()
+end
+
+function UI:ApplyWindowLayer()
+    if self.frame.SetFixedFrameLevel then self.frame:SetFixedFrameLevel(false) end
+    self.frame:SetFrameStrata("DIALOG")
+    self.frame:SetFrameLevel(WINDOW_LEVEL)
+    if self.frame.SetFixedFrameLevel then self.frame:SetFixedFrameLevel(true) end
 end
 
 function UI:IsReadOnly()
@@ -173,6 +181,7 @@ function UI:Create(anchor)
     local panel = CreateFrame("Frame", nil, anchor)
     self.frame = panel
     panel:Hide()
+    self:ApplyWindowLayer()
     panel:SetSize(WIDTH, HEIGHT)
     if panel.SetClampedToScreen then panel:SetClampedToScreen(true) end
     panel:EnableMouse(true)
@@ -328,6 +337,7 @@ function UI:Open()
         if not self.frame then self:Create(anchor) end
         self.frame:Hide()
         self.frame:SetParent(anchor)
+        self:ApplyWindowLayer()
         self.frame:SetScale(self.preferences and self.preferences:Get("watchScale") or 1)
         self.frame:SetMovable(mode == "STANDALONE" and not (self.preferences and self.preferences:Get("lockWindows")))
         self.frame:ClearAllPoints()

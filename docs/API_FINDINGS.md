@@ -337,3 +337,23 @@ drag. Actual collection/rendering in Forever with EllesmereUI remains pending a
 new client check. Four optional settings (Watch size, start category, position
 lock, detailed logs) and removal of the redundant Up/Down buttons are likewise
 offline-tested. Existing market/history math and schema are unchanged.
+
+## 0.5.5 product description and foreground windows
+
+The user's new addon-selection screenshot shows the custom MarketPilot logo in
+the list. `IconTexture` display in that tested Forever client is now CONFIRMED.
+Its tooltip shows version 0.5.3; a read of the installed TOC during this follow-up
+finds 0.5.4 on disk. The panel screenshot also contains the earlier Up/Down buttons.
+The images alone cannot establish when that UI session was loaded.
+
+The panel screenshot confirms action buttons and the player frame overlapping
+Market Watch. Code inspection found that Watch did not set its own frame strata,
+unlike Settings. Installed Ellesmere defaults use MEDIUM for normal action bars
+and unit frames, with some HUD components on HIGH. Watch now uses DIALOG level 100,
+and Settings DIALOG level 200, with deterministic reparent/open-order coverage.
+The corrected in-client stacking remains to be checked; no HUD frames were edited.
+
+The addon Notes now describe gathering analysis/history/trends without beta or
+milestone branding. Historical validation records and the existing DB market key
+remain unchanged; a product-description change is not a migration or evidence of
+new client/API compatibility. No new interface number is assumed.
