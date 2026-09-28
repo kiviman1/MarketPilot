@@ -3,7 +3,8 @@ local Preferences = {}
 Preferences.__index = Preferences
 MP.Preferences = Preferences
 
-local defaults = { minimapShown = true, minimapAngle = 220 }
+local defaults = { minimapShown = true, minimapAngle = 220, watchScale = 1,
+    defaultCategory = "All", lockWindows = false, debugLogging = false }
 local function finite(value)
     return type(value) == "number" and value == value and value > -math.huge and value < math.huge
 end
@@ -13,8 +14,14 @@ local function position(value)
     return { x = value.x, y = value.y }
 end
 local function validate(key, value)
-    if key == "minimapShown" then return type(value) == "boolean", value end
+    if key == "minimapShown" or key == "lockWindows" or key == "debugLogging" then return type(value) == "boolean", value end
     if key == "minimapAngle" then return finite(value), finite(value) and value % 360 or nil end
+    if key == "watchScale" then
+        return value == 0.8 or value == 0.9 or value == 1 or value == 1.1 or value == 1.2, value
+    end
+    if key == "defaultCategory" then
+        return value == "All" or value == "Mining" or value == "Herbalism" or value == "Skinning", value
+    end
     if key == "watchPosition" or key == "settingsPosition" then
         if value == nil then return true, nil end
         local copy = position(value); return copy ~= nil, copy

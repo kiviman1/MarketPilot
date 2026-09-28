@@ -107,4 +107,42 @@ test("window positions capture scaled center coordinates and apply with screen c
     assert(P.CapturePosition(frame, parent) == nil and P.CapturePosition(nil, parent) == nil)
     assert(P.ApplyPosition(nil, parent, value) == false)
 end)
+test("old version-one preferences gain session defaults without a migration or writes", function()
+    local saved = root()
+    saved.preferences = { version = 1, minimapShown = false, minimapAngle = 33, watchPosition = { x = 12, y = -15 } }
+    local before, prefs = clone(saved), P.New(saved)
+    assert(prefs:Get("watchScale") == 1 and prefs:Get("defaultCategory") == "All")
+    assert(prefs:Get("lockWindows") == false and prefs:Get("debugLogging") == false)
+    equal(saved, before)
+end)
+test("size category lock and debug choices persist exactly and retain unrelated preferences", function()
+    local saved = root(); local before, prefs = clone(saved), P.New(saved)
+    for _, value in ipairs({ 0.8, 0.9, 1, 1.1, 1.2 }) do
+        assert(prefs:Set("watchScale", value)); assert(P.New(saved):Get("watchScale") == value)
+    end
+    for _, category in ipairs({ "All", "Mining", "Herbalism", "Skinning" }) do
+        assert(prefs:Set("defaultCategory", category)); assert(P.New(saved):Get("defaultCategory") == category)
+    end
+    assert(prefs:Set("lockWindows", true) and prefs:Set("debugLogging", true))
+    prefs:ResetPositions()
+    local reload = P.New(saved)
+    assert(reload:Get("watchScale") == 1.2 and reload:Get("defaultCategory") == "Skinning")
+    assert(reload:Get("lockWindows") and reload:Get("debugLogging"))
+    assert(saved.preferences.version == 1 and saved.schema == 1)
+    local copy = clone(saved); copy.preferences = nil; equal(copy, before)
+end)
+test("unsupported setting values are rejected and malformed saved fields use defaults", function()
+    local saved, prefs = root(), nil; prefs = P.New(saved)
+    for _, value in ipairs({ 0.7, 1.3, 0.85, 100, "1", false, 0/0, math.huge }) do
+        assert(not prefs:Set("watchScale", value))
+    end
+    for _, value in ipairs({ "all", "Fishing", "", 1, false }) do assert(not prefs:Set("defaultCategory", value)) end
+    assert(not prefs:Set("lockWindows", 1) and not prefs:Set("debugLogging", "yes"))
+    assert(saved.preferences == nil)
+    saved.preferences = { version = 1, watchScale = 5, defaultCategory = "Fishing", lockWindows = 1, debugLogging = "yes" }
+    local before = clone(saved)
+    assert(prefs:Get("watchScale") == 1 and prefs:Get("defaultCategory") == "All")
+    assert(prefs:Get("lockWindows") == false and prefs:Get("debugLogging") == false)
+    equal(saved, before)
+end)
 print("PASS " .. passed .. " preferences offline tests (Lua 5.1)")

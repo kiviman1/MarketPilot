@@ -26,7 +26,7 @@ There is no Inventory, Pricing, Sale Assistant or posting module. Probe is uncha
 | Preferences | Versioned optional UI settings; safe defaults, validation and position conversion |
 | UIViewModel | Presentation: formatting, missing-data labels, watch/detail/report text |
 | UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
-| Settings | Independent UIParent window for launcher visibility and window-position reset |
+| Settings | Independent UIParent window for display, category, lock, trace and launcher preferences |
 | Minimap | Native click/drag launcher; injected watch/settings callbacks |
 
 ```text
@@ -155,7 +155,10 @@ hide stops dragging; the AH-side panel remains fixed to the existing anchor.
 
 Preferences are an optional, separately versioned extension of the schema-1 root:
 `preferences = { version=1, minimapShown=<boolean>, minimapAngle=<degrees>,
-watchPosition={x,y}, settingsPosition={x,y} }`. Absent fields use defaults without
+watchPosition={x,y}, settingsPosition={x,y}, watchScale=<0.8/0.9/1/1.1/1.2>,
+defaultCategory=<All/Mining/Herbalism/Skinning>, lockWindows=<boolean>,
+debugLogging=<boolean> }`. Scale defaults to 1, category to All, lock/trace to false.
+Absent fields use defaults without
 writing anything. Positions are offsets from UIParent center in its scale. Only
 an explicit setting/drag/reset writes validated primitive preferences; opening
 windows does not seed settings. Reads return position copies. Unknown preference
@@ -171,8 +174,8 @@ unchanged. Watch columns use No scan, No price, Failed and explained history das
 Known zero counts remain zero; unknown prices remain absent internally.
 
 AH parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
-MP-05 uses a 440 x 650 frame with native scrolling, mouse wheel and Up/Down buttons;
-collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
+MP-05 uses a 440 x 650 frame with native mouse-wheel scrolling; no Up/Down buttons.
+Collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
 anchor/render failures hide the panel and print diagnostics.
 
 Category filters and six-row paging keep the expanded catalogue bounded onscreen.
@@ -181,8 +184,29 @@ and detail temporarily, with four items per section plus a remaining count.
 Close clears the explicit-watch preference. Screen clamping is guarded by method
 availability; the real client still needs font/scale/layout validation.
 `/mp report` can open a hidden standalone report directly. Normal scan trace is
-quiet; `/mp debug on/off` controls session-only verbose output, while errors and
+quiet; `/mp debug on/off` and Settings share the saved verbose-log preference, while errors and
 batch completion remain visible.
+
+Watch scaling preserves UIParent-coordinate offsets; Settings is not scaled by
+that option. The default category applies at initial preference binding and when
+its configured value changes, so lifecycle refreshes do not erase manual browsing.
+Title-drag guards enforce the lock; explicit position reset remains available.
+These options do not change scanner scope, statistical rules or retention.
+
+The named native `MarketPilotMinimapButton` exposes its `icon` texture to button
+collectors. The installed EllesmereUI source gathers named minimap Buttons at
+least 20 units wide, then owns their parent/anchors/visibility in its flyout or row.
+Launcher refresh respects foreign parents and changed anchor tuples, and only an
+explicit false-to-true visibility change requests Show after initial creation.
+An own-button OnShow/SetShown guard keeps an explicitly hidden icon noninteractive
+even with a collector's force-Show hook. The installed EllesmereUI freezes wanted
+visibility while its flyout is open. A small optional adapter writes only our
+already tracked entry in its exported `_EBS_AddonVisible` table and requests its
+exported `_EMM_ApplyMinimap` on an explicit visibility transition. Both exports
+are type-checked; callback errors are reported. Ellesmere owns the rebuild, which
+may close its flyout. There is no external-file edit, container hierarchy hook,
+library or polling. Other collectors retain the generic path and may leave a
+vacant cell until they rebuild. Native drag is disabled while placement is managed.
 
 `/mp watch` toggles that same frame anywhere. Away from AH its mode is STANDALONE,
 parent/anchor `UIParent`, `CENTER -> CENTER` plus the saved title-drag offset, with

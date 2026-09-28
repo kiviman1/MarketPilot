@@ -1,5 +1,5 @@
 local _, MP = ...
-local VERSION = "0.5.3"
+local VERSION = "0.5.4"
 local debugEnabled = false
 
 local function debug(message)
@@ -112,8 +112,15 @@ MP.panel = panel
 local preferences = MP.Preferences.New(nil)
 local settings, minimap
 panel.preferences = preferences
+local function applyPreference(key)
+    if not key or key == "debugLogging" then debugEnabled = preferences:Get("debugLogging") end
+    if not key or key == "watchScale" or key == "defaultCategory" or key == "lockWindows" then
+        panel:Guard(panel.ApplyPreferences)
+    end
+    if key == "minimapShown" then minimap:Refresh() end
+end
 settings = MP.Settings.New(preferences, {
-    onChanged = function() minimap:Refresh() end,
+    onChanged = applyPreference,
     onResetPositions = function() panel:Guard(panel.ResetPosition) end,
 }, debug)
 minimap = MP.Minimap.New(preferences, {
@@ -130,6 +137,7 @@ local function initializePreferences()
     -- the only preference writes; market history remains owned by Database.
     local ok, err = pcall(function()
         preferences:Bind(MarketPilotDB)
+        applyPreference()
         settings:Refresh()
         minimap:Refresh()
     end)
@@ -251,7 +259,9 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "svdebug" then savedVariablesDebug()
         elseif command == "svmark" then markSavedVariables()
         elseif command == "debug on" or command == "debug off" then
-            debugEnabled = command == "debug on"
+            preferences:Set("debugLogging", command == "debug on")
+            applyPreference("debugLogging")
+            settings:Refresh()
             debug("scan trace " .. (debugEnabled and "ON" or "OFF"))
         elseif command == "status" or command == "" then debug(scanner:Summary())
         else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp settings | /mp debug on/off") end

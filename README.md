@@ -3,7 +3,7 @@
 Private, lightweight WoW Forever market-intelligence terminal for Mining,
 Herbalism and Skinning commodities.
 
-## MP-05 — gathering market watch (0.5.3, release preparation)
+## MP-05 — gathering market watch (0.5.4, release preparation)
 
 Starting from the validated MP-03 side panel:
 
@@ -23,7 +23,11 @@ per page, and use **Current**, **History** or **Market Report** for detail.
 Away from AH, click the **minimap icon** or use `/mp watch` for stored history;
 drag its title to move the read-only window. `/mp report` opens the stored report.
 Right-click the minimap icon, click **Settings**, or use `/mp settings` for an
-independent settings window. Hide/show the icon or reset window positions there.
+independent settings window. Adjust Watch size (80–120%), choose its start
+category, lock window positions, toggle detailed scan logs, hide/show the icon,
+or reset window positions. Scroll with the mouse wheel; redundant Up/Down buttons
+have been removed. The named launcher supports the installed EllesmereUI icon
+container and leaves its layout under that container's control.
 AH opens the usual attached scan panel; closing AH returns an explicitly opened
 watch to its saved standalone position. No login/background scan starts automatically.
 

@@ -48,7 +48,8 @@ callbacks cannot change completed/cancelled/new scans. `/mp status` shows deadli
 support as `30s` or `UNAVAILABLE`; without it, manual AH close remains recovery.
 
 Normal scan trace is quiet; errors and batch completion remain visible.
-`/mp debug on` enables detailed trace, `/mp debug off` disables it (session-only).
+`/mp debug on` enables detailed trace, `/mp debug off` disables it. This saved
+preference also appears as **Detailed scan log** in Settings; both stay synchronized.
 Debug helpers: `/mp status`, `/mp dbstatus`, `/mp svdebug`, `/mp svmark`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
 
@@ -56,10 +57,34 @@ The UI has no sale, bag, purchase or posting workflow.
 
 Left-click the minimap icon to toggle Market Watch. Right-click it, click the
 panel's **Settings** button, or use `/mp settings` for independent settings.
-Drag the minimap icon and release to place it around the rim. No update loop runs.
-Settings offers **Show minimap icon** and **Reset window positions**; it stays
-available even if the icon is hidden, the watch is closed or AH opens/closes.
-Drag either standalone window by its title. AH-side Market Watch stays attached.
+Without an icon container, drag the minimap icon and release to place it around
+the rim. When a container owns the icon, it also owns its placement/drag behavior.
+No MarketPilot update loop runs. Settings stays independent of Watch and AH:
+
+- **Market Watch size:** 80%, 90%, 100%, 110% or 120%; changes apply immediately
+  to Watch only, keeping Settings readable and standalone position intact.
+- **Start category:** All, Mining, Herbalism or Skinning. Selecting a default
+  also changes the current filter; ordinary category browsing stays session-only.
+  This is a display filter, not a change to which materials a batch scans.
+- **Lock window positions:** blocks title dragging for both standalone windows.
+- **Detailed scan log:** saved verbose trace preference; errors remain visible.
+- **Show minimap icon** and **Reset window positions** remain available.
+
+Drag either unlocked standalone window by its title. AH-side Watch stays attached.
+Reset affects positions only, preserving history and the other preferences.
+
+The launcher now has the discoverable name `MarketPilotMinimapButton` and `icon`
+texture field. The installed EllesmereUI collector previously skipped unnamed
+buttons, explaining the user screenshot. MarketPilot respects reparented/changed
+anchors and does not force Show on routine AH/login refreshes. Own click/visibility
+guards preserve an explicit hide preference even if a collector attempts to show
+it. For the installed EllesmereUI revision, an optional adapter uses its exported
+button-visibility table and ApplyMinimap bridge only on an explicit checkbox
+change, and only for the already tracked MarketPilot button. EllesmereUI rebuilds
+its own layout (and may close its flyout). This handles its visibility tracking
+being frozen while the flyout is open. No library or external file changes are
+required. Other collectors use the generic behavior and may retain an empty cell
+until their next layout rebuild. Changed/missing Ellesmere exports fall back safely.
 
 The addon-list logo uses `## IconTexture` and the same bundled `Media/Icon.tga`.
 Its actual display in Forever's addon selection screen remains a client check;
@@ -157,7 +182,9 @@ pre-bind observations before deciding whether data was loaded or replaced.
 ## Implementation and persistence
 
 UI preferences are an optional extension within the same `MarketPilotDB` root:
-`preferences.version=1`, minimap visibility/angle and the two window positions.
+`preferences.version=1`, minimap visibility/angle, two window positions, Watch scale,
+default category, window lock and detailed-log preference. New optional fields
+read safe defaults on older version-1 data, with no migration/reset.
 Defaults are read without writes; only an explicit change, drag or position reset
 saves them. Unsupported preference versions remain untouched and use session-only
 defaults/overrides. The history schema remains 1 with no migration or reset; reset
@@ -200,7 +227,7 @@ More detail: [architecture](../docs/ARCHITECTURE.md),
 ## Dashboard layout and limits
 
 Own native frame, parent `AuctionHouseFrame`, anchored TOPLEFT to its TOPRIGHT,
-8 UI units right, 440 x 650. Mouse wheel and Up/Down scroll; +/- collapses to 42
+8 UI units right, 440 x 650 before user scaling. Mouse wheel scrolls; +/- collapses to 42
 high. Standalone uses the same frame, parent `UIParent`, anchor CENTER to CENTER.
 No deep Blizzard hooks/replacement. Six rows are visible per page, filtered by
 category. Numeric history is implemented; the optional sparkline is deferred.
@@ -236,18 +263,20 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.3 (no release build yet)
+## In-game acceptance for 0.5.4 (no release build yet)
 
 No release package/tag is created in this follow-up. CI validates the source
 manifest without producing a ZIP. A further user experiment is pending.
 
-1. Check the new icon in the character-screen addon list and beside the minimap.
+1. Check the logo in the character-screen addon list. The minimap icon should
+   enter the EllesmereUI container; open/close the container, AH and Settings
+   without the icon jumping out or forcing the container open.
    Left-click opens/closes stored Watch, right-click opens independent Settings.
 2. Drag Watch by its title away from AH. Close/reopen and `/reload`: restore its
    position and real prices. Item buttons/report must not scan outside AH.
 3. Move Settings separately; close Watch and open/close AH: Settings stays in
    place. Hide the minimap icon, reload, then use `/mp settings` to restore it.
-   Drag the minimap icon; release/reload retains its angle. Check scaled UI too.
+   Without the collector, icon drag/release/reload retains its rim angle.
 4. Open AH with Watch already visible: it docks on the right and cannot be dragged
    off AH. Scan controls work. Close AH: return to the saved standalone position.
    Test AH open or Watch close while a title drag is in progress.
@@ -255,6 +284,11 @@ manifest without producing a ZIP. A further user experiment is pending.
    AH panel stays docked. History, filters and minimap visibility stay intact.
 6. No Demo button/banner remains. `/mp demo on` only prints command help; no
    synthetic data appears and existing snapshot counts stay unchanged.
+7. Exercise all five Watch sizes while standalone/docked; Settings retains its
+   own size. Set a start category, lock/unlock titles and enable/disable logs;
+   reload retains these preferences without altering stored prices/counts.
+8. Up/Down buttons are gone. Mouse wheel reaches all Current/History details
+   and the bottom of Market Report at each size.
 
 The original five-item batch and post-reload database retention were confirmed.
 The expanded 56-item batch and the new launcher/settings/drag behavior need a

@@ -50,6 +50,7 @@ end
 
 function UI:StartDrag()
     if self.mode ~= "STANDALONE" or self.scanner.ahOpen or not self.frame or not self.frame:IsShown() then return false end
+    if self.preferences and self.preferences:Get("lockWindows") then return false end
     self.frame:StartMoving()
     self.dragging = true
     return true
@@ -70,6 +71,23 @@ function UI:ResetPosition()
     if self.preferences then self.preferences:Set("watchPosition", nil) end
     if self.frame and self.mode == "STANDALONE" then
         MP.Preferences.ApplyPosition(self.frame, UIParent, nil)
+    end
+end
+
+function UI:ApplyPreferences()
+    if not self.preferences then return end
+    local category = self.preferences:Get("defaultCategory")
+    if category ~= self.appliedDefaultCategory then
+        self.category, self.page, self.appliedDefaultCategory = category, 1, category
+    end
+    if self.frame then
+        self:StopDrag()
+        self.frame:SetScale(self.preferences:Get("watchScale"))
+        self.frame:SetMovable(self.mode == "STANDALONE" and not self.preferences:Get("lockWindows"))
+        if self.mode == "STANDALONE" then
+            MP.Preferences.ApplyPosition(self.frame, UIParent, self.preferences:Get("watchPosition"))
+        end
+        self:Update()
     end
 end
 
@@ -290,9 +308,7 @@ function UI:Create(anchor)
     self.scrollLimit = contentHeight - (HEIGHT - 74)
     self.footer = CreateFrame("Frame", nil, panel)
     self.footer:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0); self.footer:SetSize(WIDTH, 30)
-    label(self.footer, "^ rising  v falling  = stable  - needs history", 14, -8, 328)
-    button("Up", self.footer, 340, -3, 40, function(s) s:Scroll(-250) end)
-    button("Down", self.footer, 384, -3, 42, function(s) s:Scroll(250) end)
+    label(self.footer, "^ rising  v falling  = stable  - needs history", 14, -8, WIDTH - 28)
 end
 
 function UI:Open()
@@ -312,7 +328,8 @@ function UI:Open()
         if not self.frame then self:Create(anchor) end
         self.frame:Hide()
         self.frame:SetParent(anchor)
-        self.frame:SetMovable(mode == "STANDALONE")
+        self.frame:SetScale(self.preferences and self.preferences:Get("watchScale") or 1)
+        self.frame:SetMovable(mode == "STANDALONE" and not (self.preferences and self.preferences:Get("lockWindows")))
         self.frame:ClearAllPoints()
         if mode == "AH" then self.frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 8, 0)
         else MP.Preferences.ApplyPosition(self.frame, UIParent, self.preferences and self.preferences:Get("watchPosition")) end

@@ -2,7 +2,7 @@
 ## Title: MarketPilot
 ## Notes: MP-05 gathering market intelligence for Forever beta
 ## Author: Kivanc / MarketPilot
-## Version: 0.5.3
+## Version: 0.5.4
 ## IconTexture: Interface\AddOns\MarketPilot\Media\Icon.tga
 ## SavedVariables: MarketPilotDB
 

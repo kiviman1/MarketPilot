@@ -19,6 +19,9 @@ local function fixture(configure)
         local w = { kind = kind, parent = parent, shown = true, enabled = true, scripts = {}, events = {} }
         f.objects[#f.objects + 1] = w
         function w:GetObjectType() return self.kind end
+        function w:GetName() return self.name end
+        function w:GetParent() return self.parent end
+        function w:GetPoint() if self.point then return unpack(self.point) end end
         function w:SetParent(parent) self.parent = parent end
         function w:SetMovable(value) self.movable = value end
         function w:StartMoving() assert(self.movable); self.moving = true end
@@ -28,12 +31,15 @@ local function fixture(configure)
         function w:SetFrameStrata(value) self.strata = value end
         function w:GetWidth() return self.width or 0 end
         function w:GetHeight() return self.height or 0 end
-        function w:GetEffectiveScale() return self.scale or 1 end
+        function w:SetScale(value) self.scale = value end
+        function w:GetScale() return self.scale or 1 end
+        function w:GetEffectiveScale() return (self.scale or 1) * (self.parent and self.parent:GetEffectiveScale() or 1) end
         function w:GetCenter()
             if self.center then return self.center[1], self.center[2] end
             if self.point and self.point[1] == "CENTER" then
                 local x, y = self.point[2]:GetCenter()
-                return x + self.point[4], y + self.point[5]
+                local ratio = self:GetEffectiveScale() / self.point[2]:GetEffectiveScale()
+                return x / ratio + self.point[4], y / ratio + self.point[5]
             end
             return 0, 0
         end
@@ -50,10 +56,18 @@ local function fixture(configure)
         function w:SetSize(width, height) self.width, self.height = width, height end
         function w:SetWidth(width) self.width = width end
         function w:SetHeight(height) self.height = height end
-        function w:Show() self.shown = true end
+        function w:Show()
+            local wasShown = self.shown; self.shown = true
+            if not wasShown and self.scripts.OnShow then self.scripts.OnShow(self) end
+        end
         function w:Hide()
             local wasShown = self.shown; self.shown = false
             if wasShown and self.scripts.OnHide then self.scripts.OnHide(self) end
+        end
+        function w:SetShown(shown)
+            local wasShown = self.shown; self.shown = not not shown
+            local event = shown and "OnShow" or "OnHide"
+            if wasShown ~= self.shown and self.scripts[event] then self.scripts[event](self) end
         end
         function w:IsShown() return self.shown end
         function w:IsVisible() return self.shown and (not self.parent or self.parent:IsVisible()) end
@@ -76,7 +90,7 @@ local function fixture(configure)
         function w:SetScript(event, callback)
             assert(event == "OnEvent" or event == "OnClick" or event == "OnMouseWheel"
                 or event == "OnDragStart" or event == "OnDragStop" or event == "OnHide"
-                or event == "OnEnter" or event == "OnLeave" or event == "OnMouseDown", "unexpected hook: " .. event)
+                or event == "OnEnter" or event == "OnLeave" or event == "OnMouseDown" or event == "OnShow", "unexpected hook: " .. event)
             self.scripts[event] = callback
         end
         function w:RegisterEvent(event) self.events[event] = true end
@@ -89,8 +103,10 @@ local function fixture(configure)
         return w
     end
     env.CreateFrame = function(kind, name, parent, template)
-        assert(name == nil, "no global widget names needed")
+        assert(name == nil or name == "MarketPilotMinimapButton", "only the discoverable launcher needs a global name")
         local frame = widget(kind, parent)
+        frame.name = name
+        if name then env[name] = frame end
         frame.template = template
         return frame
     end
@@ -1347,6 +1363,87 @@ test("optional settings refresh failure cannot prevent AH open or a manual scan"
     assert(f:has("Window settings unavailable"))
     f:select(2770); f:complete(2770)
     assert(#f.sent == 1 and f.scanner.state == "DONE")
+end)
+
+test("footer has no Up Down buttons and mouse wheel reaches both ends of watch and report", function()
+    local f = watchFixture(); f:watch()
+    for _, widget in ipairs(f.objects) do
+        if widget.kind == "Button" then assert(widget.text ~= "Up" and widget.text ~= "Down") end
+    end
+    for _, report in ipairs({ false, true }) do
+        if report then f.panel.reportButton:Click() end
+        f.panel.scroll.scripts.OnMouseWheel(f.panel.scroll, -100)
+        assert(f.panel.scroll:GetVerticalScroll() == f.panel.scrollLimit)
+        f.panel.scroll.scripts.OnMouseWheel(f.panel.scroll, 100)
+        assert(f.panel.scroll:GetVerticalScroll() == 0)
+    end
+    assert(f.ahCalls == 0)
+end)
+
+test("watch scale updates immediately independently of settings while preserving stored position and history", function()
+    local f = watchFixture(); f:watch(); f.env.SlashCmdList.MARKETPILOT("settings")
+    local history = clone(f.env.MarketPilotDB.markets)
+    f.mp.preferences:Set("watchPosition", { x = 120, y = -60 }); f.panel:Open()
+    f.mp.settings.scalePlus:Click(); f.mp.settings.scalePlus:Click()
+    assert(f.panel.frame:GetScale() == 1.2 and f.mp.settings.frame:GetScale() == 1)
+    same(f.mp.Preferences.CapturePosition(f.panel.frame, f.env.UIParent), { x = 120, y = -60 })
+    local reload = watchFixture(function(g) g.env.MarketPilotDB = clone(f.env.MarketPilotDB) end)
+    reload:watch(); assert(reload.panel.frame:GetScale() == 1.2)
+    same(reload.mp.Preferences.CapturePosition(reload.panel.frame, reload.env.UIParent), { x = 120, y = -60 })
+    f.makeAnchor(); f:open()
+    assert(f.panel.mode == "AH" and f.panel.frame.point[2] == f.env.AuctionHouseFrame)
+    f.mp.settings.scaleMinus:Click()
+    assert(f.panel.frame:GetScale() == 1.1 and f.panel.frame.point[1] == "TOPLEFT")
+    f:event("AUCTION_HOUSE_CLOSED")
+    same(f.mp.Preferences.CapturePosition(f.panel.frame, f.env.UIParent), { x = 120, y = -60 })
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0 and reload.ahCalls == 0)
+end)
+
+test("saved start category applies once and normal browsing survives lifecycle preference refresh", function()
+    local f = watchFixture(function(g)
+        g.env.MarketPilotDB.preferences = { version = 1, defaultCategory = "Herbalism" }
+    end)
+    f:watch(); assert(f.panel.category == "Herbalism" and f.panel.page == 1)
+    local history = clone(f.env.MarketPilotDB.markets)
+    f.panel:SetCategory("Skinning"); f:event("PLAYER_ENTERING_WORLD")
+    assert(f.panel.category == "Skinning" and f.mp.preferences:Get("defaultCategory") == "Herbalism")
+    f.env.SlashCmdList.MARKETPILOT("settings")
+    f.mp.settings.categoryButton:Click(); f.mp.settings.categoryButton:Click()
+    assert(f.mp.preferences:Get("defaultCategory") == "All" and f.panel.category == "All")
+    assert(f.panel.page == 1)
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0)
+end)
+
+test("window lock stops a moving watch and cannot detach AH even when unlocked", function()
+    local f = watchFixture(); f:watch(); f.env.SlashCmdList.MARKETPILOT("settings")
+    f.panel.titleBar.scripts.OnDragStart(f.panel.titleBar)
+    f.panel.frame.center = { 980, 570 }
+    f.mp.settings.lockCheckbox:SetChecked(true); f.mp.settings.lockCheckbox:Click()
+    assert(not f.panel.dragging and not f.panel.frame.moving and not f.panel.frame.movable)
+    same(f.mp.preferences:Get("watchPosition"), { x = 20, y = 30 })
+    f.panel.titleBar.scripts.OnDragStart(f.panel.titleBar); assert(not f.panel.dragging)
+    f.panel.toggle:Click(); assert(f.panel.collapsed)
+    f.makeAnchor(); f:open()
+    f.mp.settings.lockCheckbox:SetChecked(false); f.mp.settings.lockCheckbox:Click()
+    assert(not f.panel.frame.movable and f.panel.mode == "AH")
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.frame.movable and not f.mp.preferences:Get("lockWindows"))
+end)
+
+test("debug setting and slash command stay synchronized and survive reload without changing history", function()
+    local f = fixture(); f:open(); f.env.SlashCmdList.MARKETPILOT("settings")
+    f.mp.settings.debugCheckbox:SetChecked(true); f.mp.settings.debugCheckbox:Click()
+    f:select(2770); f:complete()
+    assert(f:has("one query sent") and f.mp.preferences:Get("debugLogging"))
+    local history = clone(f.env.MarketPilotDB.markets)
+    local reload = fixture(function(g) g.env.MarketPilotDB = clone(f.env.MarketPilotDB) end)
+    reload:open(); reload:select(2770)
+    assert(reload:has("one query sent"))
+    f.env.SlashCmdList.MARKETPILOT("debug off")
+    assert(not f.mp.settings.debugCheckbox:GetChecked() and not f.mp.preferences:Get("debugLogging"))
+    f.output = {}; f.panel.scan:Click()
+    assert(not f:has("one query sent"))
+    same(f.env.MarketPilotDB.markets, history)
 end)
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

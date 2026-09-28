@@ -309,3 +309,31 @@ reads this metadata for its icon. That is a reference for implementation, **not*
 confirmation that Forever's character-screen addon list supports it; actual logo
 display remains UNKNOWN. No addon-list hooks, AH signatures or fallback probes
 were added. Source checks do not create a build/package or release tag.
+
+## 0.5.4 settings and minimap-container follow-up
+
+The user's 0.5.3 screenshots confirm that the independent Settings window renders
+and the MarketPilot icon renders beside the minimap. They also show the icon
+outside the installed EllesmereUI button container. They do not confirm movement,
+preference persistence or the character-screen addon-list logo.
+
+Read-only inspection of the installed `EllesmereUIMinimap.lua` found a concrete
+discovery mismatch: its `GatherMinimapButtons` checks Button type, nonempty name
+and minimum width (lines 1266–1281 in that installed revision). MarketPilot created
+an unnamed Button, so it was excluded. The launcher now has a stable native name
+and exposes its icon texture; its own refresh yields layout/visibility ownership
+to collectors. It adds no LibDBIcon/Ace dependency or external addon modifications.
+
+That installed collector also freezes visibility tracking while the flyout is
+open. An explicit visibility change uses its exported `_EBS_AddonVisible` entry
+for this button and guarded `_EMM_ApplyMinimap` options bridge, if present and
+already tracking the button. This lets the collector update its own layout; it
+can close the open flyout. It is compatibility with the inspected revision, not
+a claim of a stable public interface across all future EllesmereUI releases.
+
+Offline tests cover that collection rule, external parent/anchor changes,
+collector force-Show behavior, visibility preferences, click handlers and native
+drag. Actual collection/rendering in Forever with EllesmereUI remains pending a
+new client check. Four optional settings (Watch size, start category, position
+lock, detailed logs) and removal of the redundant Up/Down buttons are likewise
+offline-tested. Existing market/history math and schema are unchanged.
