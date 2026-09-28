@@ -2,13 +2,14 @@ local _, MP = ...
 local Scanner = {}
 Scanner.__index = Scanner
 MP.Scanner = Scanner
+Scanner.TIMEOUT_SECONDS = 30
 
 local MAX_INTEGER = 9007199254740991
 local ACTIVE = { WAITING = true, QUERYING = true, COLLECTING = true }
 
-function Scanner.New(api, itemID, notify, clock)
+function Scanner.New(api, itemID, notify, clock, schedule)
     return setmetatable({
-        api = api, itemID = itemID, notify = notify, clock = clock,
+        api = api, itemID = itemID, notify = notify, clock = clock, schedule = schedule,
         state = "IDLE", ahOpen = false, queryCount = 0,
     }, Scanner)
 end
@@ -30,10 +31,12 @@ function Scanner:Summary()
         .. " suspicious=" .. number(analysis and analysis.anomaly.suspiciousCount)
         .. " extreme=" .. number(analysis and analysis.anomaly.extremeCount)
         .. " anomalySufficient=" .. (analysis and (analysis.anomaly.sufficient and "yes" or "no") or "UNKNOWN")
+        .. " deadline=" .. (self.schedule and (Scanner.TIMEOUT_SECONDS .. "s") or "UNAVAILABLE")
         .. " (copper/unit)" .. (self.error and " error=" .. self.error or "")
 end
 
 function Scanner:Fail(reason)
+    self.requestToken = nil
     self.analysis = nil
     self.state, self.sample, self.summary = "ERROR", nil, nil
     self.error = reason
@@ -46,6 +49,8 @@ function Scanner:OnHouseOpened()
 end
 
 function Scanner:OnHouseClosed()
+    self.requestToken = nil
+    self.stopBatchReason = nil
     self.uncertainQuery = nil
     self.analysis = nil
     self.ahOpen = false
@@ -59,6 +64,7 @@ end
 
 function Scanner:CancelWaiting()
     if self.state == "WAITING" then
+        self.requestToken = nil
         self.state, self.error = "IDLE", nil
         self.notify("pending scan cancelled before dispatch. " .. self:Summary())
     end
@@ -70,31 +76,67 @@ function Scanner:Start(itemID)
         self.notify("scan already pending; no additional query. " .. self:Summary())
         return
     end
-    if self.blockedReason then self:Fail(self.blockedReason); return end
+    self.stopBatchReason = nil
     if itemID ~= nil then
         if not MP.Items.Contains(itemID) then self:Fail("UNKNOWN: item is not configured"); return end
         self.itemID = itemID
+    end
+    if self.blockedReason then
+        self.stopBatchReason = "UNKNOWN: required events unavailable"
+        self:Fail(self.blockedReason)
+        return
     end
     self.sample, self.summary, self.error = nil, nil, nil
     self.analysis = nil
     if not self.ahOpen then self:Fail("AH is closed; open it before /mp scan"); return end
     local available, err = self.api:IsAvailable()
-    if not available then self:Fail(err); return end
+    if not available then
+        self.stopBatchReason = "UNKNOWN: Auction API unavailable"
+        self:Fail(err)
+        return
+    end
     self.state = "WAITING"
+    if self.schedule then
+        local token = {}
+        self.requestToken = token
+        -- One deadline per player-requested scan; no polling, retry or timer
+        -- renewal on throttle events. Superseded callbacks cannot affect a scan.
+        local scheduled, scheduleError = pcall(self.schedule, Scanner.TIMEOUT_SECONDS, function()
+            if self.requestToken ~= token or not self:IsActive() then return end
+            local dispatched = self.state ~= "WAITING"
+            self.uncertainQuery = dispatched
+            self.stopBatchReason = dispatched and "UNKNOWN: reopen AH" or "TIMEOUT: throttle not ready"
+            self:Fail(dispatched and "UNKNOWN: result timeout; close/reopen AH before scanning again"
+                or "UNKNOWN: throttle wait timed out before dispatch")
+        end)
+        if not scheduled then
+            self.stopBatchReason = "UNKNOWN: scan deadline unavailable"
+            self:Fail("UNKNOWN: scan deadline unavailable: " .. tostring(scheduleError))
+            return
+        end
+    end
     self:TryQuery()
 end
 
 function Scanner:TryQuery()
     if not self.ahOpen or self.state ~= "WAITING" then return end
     local ready, err = self.api:IsReady()
-    if ready == nil then self:Fail(err); return end
+    if ready == nil then
+        self.stopBatchReason = "UNKNOWN: throttle readiness unavailable"
+        self:Fail(err)
+        return
+    end
     if not ready then
         self.notify("throttle not ready; waiting for system-ready event. " .. self:Summary())
         return
     end
     self.state = "QUERYING"
-    local ok, queryError = self.api:QueryCommodity(self.itemID)
-    if not ok then self.uncertainQuery = true; self:Fail(queryError); return end
+    local ok, queryError, uncertain = self.api:QueryCommodity(self.itemID)
+    if not ok then
+        self.uncertainQuery = uncertain ~= false
+        self:Fail(queryError)
+        return
+    end
     self.queryCount = self.queryCount + 1
     self.notify("one query sent; waiting for matching commodity result. " .. self:Summary())
 end
@@ -127,6 +169,7 @@ function Scanner:OnCommodityResults(itemID)
     local analysis, analysisError = MP.Statistics.Analyze(self.sample)
     if not analysis then self:Fail(analysisError); return end
     self.analysis = analysis
+    self.requestToken = nil
     self.summary, self.error, self.state = summary, nil, "DONE"
     self.notify(self:Summary())
 end

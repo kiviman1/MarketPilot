@@ -2,6 +2,10 @@
 
 Observed WoW Forever beta behavior only. Do not fill this file from memory or from another WoW branch without clearly labelling it as external reference.
 
+Latest: [2026-09-28 production persistence recheck](#mp-05-persistence-and-commodity-recheck--2026-09-28)
+confirmed retained snapshots after reload. Earlier failure reports below remain
+historical evidence, not the outcome of this latest test.
+
 Evidence source: the user's real Forever beta client validation report, received
 2026-09-18. CONFIRMED below is limited to those reported observations; no new
 in-client testing was performed while recording this update. The exact client
@@ -55,7 +59,7 @@ AUCTION_HOUSE_THROTTLED_SPECIFIC_SEARCH_READY: CONFIRMED unavailable — registr
 Copper Ore (2770) result path: CONFIRMED — commodity
 Peacebloom (2447), Light Leather (2318) result paths: CONFIRMED — MP-03 click scans succeeded
 Tin Ore (2771) current commodity values: CONFIRMED — MP-05 live batch report
-Silver Ore (2775) nonempty commodity result: UNKNOWN — MP-05 panel showed UNKNOWN
+Silver Ore (2775) nonempty commodity result: CONFIRMED — 2026-09-28 scan returned 8 levels, total quantity 219
 unitPrice unit: CONFIRMED — per-unit price in copper; 200 matches 2 silver/unit in AH UI
 quantity meaning: CONFIRMED — total quantity at that commodity price level; 285 matches the AH UI total of 285
 row aggregation behavior: CONFIRMED — observed commodity quantity is aggregated at its price level
@@ -176,14 +180,14 @@ The reported remaining UX gap was inability to open stored history away from AH.
 The account-wide declaration/status is not itself evidence of persistence after
 logout or of realm/faction market-sharing rules.
 
-## MP-05 standalone follow-up — UNKNOWN / pending
+## MP-05 remaining client checks
 
 The new `/mp watch` standalone lifecycle is tested only in offline Lua fixtures.
 No client test was performed by the coding agent. Remaining in-client checks:
 
-- `MarketPilotDB` save/load, dedupe and retention in the actual client;
-- production history after `/reload`, logout and same-key character switch;
-- actual guarded realm/faction identity strings and key stability;
+- live dedupe and retention under longer use (save/load and reload succeeded in the
+  2026-09-28 recheck below);
+- production history after normal logout and same-key character switch;
 - cross-faction/cross-realm AH market-sharing semantics (UNKNOWN; conservative
   separate partitions are an implementation choice, not a verified AH rule);
 - cancellation, error recovery and long batch sessions beyond the reported run;
@@ -193,8 +197,8 @@ No client test was performed by the coding agent. Remaining in-client checks:
 - accumulated 7d/30d market history and its client presentation.
 
 Probe persistence remains the previously confirmed account-wide observation;
-it does not itself validate the new production schema. Silver Ore (2775) nonempty
-results, broader beta material catalogue, result completeness/paging, request
+it does not itself validate the new production schema. The broader beta material
+catalogue, result completeness/paging, request
 identity and normal-item search semantics remain UNKNOWN. No sell-side APIs or
 sale workflows are introduced in this MP-03-based branch. The in-game checklist
 is in [src/README.md](../src/README.md).
@@ -244,3 +248,45 @@ canary through `/mp svmark`. No further binding/retention fix, schema change, se
 SavedVariables name, or guessed migration is introduced. The canary's real reload
 survival and actual phase/global/root observations remain UNKNOWN until the user
 returns the command output; the diagnostic sequence is in [src/README.md](../src/README.md).
+
+## MP-05 persistence and commodity recheck — 2026-09-28
+
+CONFIRMED for this run, from the user's before/after-reload output and read-only
+inspection of the installed client's own SavedVariables file:
+
+- `/mp svmark` wrote `_svCanary=1790634087`.
+- The batch completed for the original five configured items. Before reload,
+  globalSameRoot=true, the Horde partition contained five item records and ten
+  snapshots, and each item had two snapshots.
+- The client wrote the complete root to `SavedVariables/MarketPilot.lua`, including
+  those ten snapshots and the canary. The prior `.bak` still contained the older
+  empty item tables; it was not modified by the coding agent.
+- After `/reload`, the user's `/mp dbstatus` still showed status=OK,
+  globalSameRoot=true and the same two snapshots per item, timestamps and prices:
+
+| Item | ID | Latest timestamp | Latest clean median (copper) |
+|---|---:|---:|---:|
+| Copper Ore | 2770 | 1790634112 | 124 |
+| Tin Ore | 2771 | 1790634113 | 385 |
+| Silver Ore | 2775 | 1790634113 | 1133 |
+| Peacebloom | 2447 | 1790634114 | 27 |
+| Light Leather | 2318 | 1790634115 | 125 |
+
+The actual unchanged key is `forever-beta:v1:18:Classic Beta PvE 2:5:Horde`.
+The space before `2` is present in the real output; earlier issue prose omitted it.
+No key rename/merge was performed. Silver Ore now has a confirmed nonempty
+commodity result (eight levels, quantity 219 in the latest reported scan).
+
+The newly written file was also loaded through the unchanged Database/Market
+modules in Lua 5.1: all five latest observations hydrated without a query. This
+offline cross-check is distinct from the user's successful client reload check.
+No additional production persistence fix, reset, migration or second saved name
+was needed. The cause of the earlier failure remains UNKNOWN; it did not recur
+in this reproduction. Post-reload canary presence was not included in the user's
+final dbstatus output, so only its disk serialization is confirmed here.
+
+Still unverified: production logout -> different same-realm/faction character;
+the revised 0.5.1 panel rendering; the newly configured Classic materials' Forever
+availability/commodity paths; the optional 30-second deadline under client lag;
+result completeness/paging and cross-market sharing. Existing mathematical tests
+do not substitute for accumulated real 7d/30d history.

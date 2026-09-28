@@ -151,6 +151,26 @@ test("Mann-Whitney guards and invalid samples preserve absence of p-values", fun
     assert(S.Compare({ 1, 2, 3 }, { 1, 2 }).p == nil)
     assert(S.Compare({ 0, 1, 2 }, { 1, 2, 3, 4, 5, 6, 7 }).status == "UNKNOWN")
 end)
+test("malformed significance arrays remain UNKNOWN instead of yielding partial ranks", function()
+    local baseline = { 100, 100, 100, 100, 100, 100, 100 }
+    for _, recent in ipairs({ false, "invalid", { [1] = 150, [3] = 150, [4] = 150 },
+        { 150, 150, 150, hidden = 999 }, { 150, 150, 150, [0] = 999 }, { 150, 150, math.huge } }) do
+        local a = S.Compare(recent, baseline)
+        assert(a.status == "UNKNOWN" and a.p == nil and a.meaningfulMove == nil)
+    end
+    assert(S.Compare(nil, baseline).status == "UNKNOWN")
+    assert(S.Compare({ 150, 150, 150 }, false).status == "UNKNOWN")
+    assert(S.Compare({}, baseline).status == "INSUFFICIENT")
+end)
+test("malformed historical records cannot crash an otherwise readable history", function()
+    local rows = { snapshot(NOW - 7 * DAY, 100), false, "broken", snapshot(NOW - 2 * DAY, 110),
+        snapshot(NOW - DAY, 120) }
+    local a = H.Analyze(rows, snapshot(NOW, 130))
+    assert(a.count == 4 and a.status == "OK" and a.windows[7].median == 110)
+    assert(H.Analyze(false, snapshot(NOW, 130)).status == "UNKNOWN")
+    assert(H.Analyze(rows, 130).status == "UNKNOWN")
+    assert(rows[2] == false and rows[3] == "broken")
+end)
 test("untied and tied p-values match independent normal-erfc references", function()
     local a = S.Compare({ 100, 101, 102 }, { 10, 20, 30, 40, 50, 60, 70 })
     near(a.p, 0.02265449408008937, 1.5e-7); assert(a.significant and a.practical and a.meaningfulMove)

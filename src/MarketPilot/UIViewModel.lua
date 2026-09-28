@@ -66,13 +66,16 @@ function View.Report(report, items)
     for _, section in ipairs(sections) do
         lines[#lines + 1] = "\n" .. section[1]
         if #report[section[2]] == 0 then lines[#lines + 1] = "No supported observations" end
-        for _, row in ipairs(report[section[2]]) do
+        for i, row in ipairs(report[section[2]]) do
+            if i > 4 then break end
             local a, value = row.data.analytics, "HIGH"
             if section[2] == "rising" then value = View.Percent(a.trend7d.pctPerDay) .. "/day"
             elseif section[2] == "cheap" then value = string.format("30d percentile %.0f", a.percentile30d)
             elseif section[2] == "significant" then value = View.PValue(a.significance.p) .. ", " .. View.Percent(a.significance.change) end
             lines[#lines + 1] = items.Metadata(row.itemID).name .. ": " .. value
         end
+        local remaining = #report[section[2]] - 4
+        if remaining > 0 then lines[#lines + 1] = "+ " .. remaining .. " more; browse Market Watch" end
     end
     lines[#lines + 1] = "\nData maturity"
     for _, state in ipairs({ "NEW", "EARLY", "7D READY", "30D READY" }) do lines[#lines + 1] = state .. ": " .. report.maturity[state] end
@@ -105,11 +108,16 @@ function View.Build(scanner, selectedItemID, metadata, readOnly)
         message = anomaly.reason == "TOO_FEW_PRICE_LEVELS" and "INSUFFICIENT: fewer than 5 distinct prices."
             or "INSUFFICIENT: unusable anomaly scale."
     end
+    if raw and raw.levelCount == 0 then message = "No price levels returned. Prices remain UNKNOWN." end
+    if not readOnly and scanner.uncertainQuery then
+        message = "UNKNOWN query outcome. Close and reopen the Auction House before scanning again."
+    end
     return {
         itemID = selectedItemID, name = metadata.name, icon = metadata.icon, state = state,
-        message = message, scanEnabled = not readOnly and scanner.ahOpen and not busy and not scanner.blockedReason,
-        itemsEnabled = readOnly or (scanner.ahOpen and not busy and not scanner.blockedReason),
-        buttonText = readOnly and "Read only - open AH to scan" or (busy and "Scanning..." or (current and "Refresh" or "Scan")),
+        message = message, scanEnabled = not readOnly and scanner.ahOpen and not busy and not scanner.blockedReason and not scanner.uncertainQuery,
+        itemsEnabled = readOnly or (scanner.ahOpen and not busy and not scanner.blockedReason and not scanner.uncertainQuery),
+        buttonText = readOnly and "Read only - open AH to scan" or (scanner.uncertainQuery and "Close and reopen AH"
+            or (busy and "Scanning..." or (current and "Refresh" or "Scan"))),
         lowest = View.Money(raw and raw.min), rawMedian = View.Money(raw and raw.weightedMedian),
         cleanMedian = View.Money(clean and clean.weightedMedian), range = range,
         quantity = count(raw and raw.totalQuantity), levels = count(raw and raw.levelCount),

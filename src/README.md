@@ -8,11 +8,21 @@ check `/dump GetBuildInfo()` rather than guessing a TOC change.
 ## Normal use
 
 Open AH -> **Scan Gathering Markets** -> watch sequential progress -> select a
-row for detail -> **Market Report**. No scan starts on login/open/reopen. The five
-configured IDs are Mining 2770/2771/2775, Herbalism 2447 and Skinning 2318. Copper
-Ore, Peacebloom and Light Leather query paths were reported live-tested in MP-03;
-Tin Ore also produced values in the MP-05 live batch; Silver Ore displayed UNKNOWN.
-Additional beta level-range items are not guessed.
+row for detail -> **Market Report**. No scan starts on login/open/reopen. There are
+56 configured Classic raw materials: 14 Mining, 31 Herbalism and 11 Skinning.
+Use All/Mining/Herbalism/Skinning and six-row paging to browse. The category filter
+changes the display; **Scan Gathering Markets always scans all configured items**.
+Current and History are separate detail tabs; Market Report is a separate view,
+showing up to four supported items per section with an explicit remaining count.
+Close hides the window; collapse preserves only its header. History/report views
+remain available through `/mp watch` and `/mp report` outside AH.
+
+IDs are checked against the [Classic item dataset](https://github.com/nexus-devs/wow-classic-items/blob/master/data/json/data.json).
+Names/icons stay client-owned. The list includes ores/stones, standard herbs plus
+Wildvine/Bloodvine, leather/scraps/hides. It excludes crafted bars/cured hides,
+specialty scales/zone skins, gems and unverified custom Forever items.
+Copper, Tin, Silver, Peacebloom and Light Leather have produced live commodity
+results; inclusion of other IDs does not claim Forever availability/result support.
 Names/icons resolve from the client and retain an ID/UNKNOWN fallback.
 
 The watchlist has current clean median, 7d change, trend arrow, 30d percentile,
@@ -29,8 +39,16 @@ parallel queries. Cancel drops unsent items; a dispatched reply may finish and
 save its observation, but starts no next query. AH close cancels/resets and hides
 the automatic AH panel; explicitly requested watch returns to standalone.
 Reopen does not resume. A safely failed item is recorded and the batch continues.
-An ambiguous dispatch stops the batch until AH close/reopen.
+An item-key failure before dispatch safely skips that item. An ambiguous dispatch
+stops the batch until AH close/reopen. If the client exposes `C_Timer.After`, one
+30-second deadline covers each accepted scan, including throttle wait. Timeout
+stops the batch without retry or another deadline/query. If nothing was sent, use
+Scan again explicitly; if a query was dispatched, close/reopen AH first. Old timer
+callbacks cannot change completed/cancelled/new scans. `/mp status` shows deadline
+support as `30s` or `UNAVAILABLE`; without it, manual AH close remains recovery.
 
+Normal scan trace is quiet; errors and batch completion remain visible.
+`/mp debug on` enables detailed trace, `/mp debug off` disables it (session-only).
 Debug helpers: `/mp status`, `/mp dbstatus`, `/mp svdebug`, `/mp svmark`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
 
@@ -68,10 +86,13 @@ partitions remain preserved rather than being guessed to belong to another marke
 
 ## Persistence diagnostics (no new persistence fix)
 
-The latest real-client report reproduced lost visible snapshots after a full
-client exit/relaunch, then scan/reload, with an unchanged active key. TOC metadata
-caching is not a supported explanation for that reproduction. The cause remains
-UNKNOWN; these diagnostics distinguish loaded-global state from a detached binding.
+The earlier real-client report reproduced lost visible snapshots after a full
+client exit/relaunch, then scan/reload, with an unchanged active key. On 2026-09-28,
+the explicit canary test produced a real saved file with five items, ten snapshots
+and the canary intact. The user's post-reload dbstatus also retained all ten
+snapshots with identical timestamps/prices. That run confirms production reload
+persistence; it does not establish the cause of the earlier failure. No root
+reset or migration was introduced.
 
 `/mp svdebug` prints observations from Core file load (before any DB.Open), and
 pre/post bind for ADDON_LOADED, PLAYER_LOGIN and PLAYER_ENTERING_WORLD. It retains
@@ -121,7 +142,8 @@ UIViewModel.lua / UI.lua / Core.lua
 AuctionAPI remains the only production AH API boundary; Statistics is unchanged.
 Core feeds successful scanner analysis to Market, which stores whitelist snapshots
 and caches pure analytics. UI formats those existing results. No dependencies,
-per-frame polling, background scans or timer chains.
+per-frame polling, background scans or timer chains. The optional scan deadline is
+one bounded failure notification; it never dispatches or retries a query.
 
 Account-wide `MarketPilotDB`, schema 1, partitions by conservative beta namespace
 plus runtime realm/faction strings. Same-key characters share history; missing
@@ -147,8 +169,9 @@ More detail: [architecture](../docs/ARCHITECTURE.md),
 Own native frame, parent `AuctionHouseFrame`, anchored TOPLEFT to its TOPRIGHT,
 8 UI units right, 440 x 650. Mouse wheel and Up/Down scroll; +/- collapses to 42
 high. Standalone uses the same frame, parent `UIParent`, anchor CENTER to CENTER.
-No deep Blizzard hooks/replacement. Five reusable rows grouped by category;
-7d sparkline has a small deferred placeholder. Native screen fit/font wrapping
+No deep Blizzard hooks/replacement. Six rows are visible per page, filtered by
+category. Numeric history is implemented; the optional sparkline is deferred.
+Native screen fit/font wrapping
 at different UI scales need MP-05 client review. Anchor/render errors print a
 panel UNKNOWN diagnostic and leave scanner debugging available.
 
@@ -159,8 +182,9 @@ inflate history; after reload scan age refers to the last retained observation.
 No idle age-refresh timer. Approximate p-values, serial dependence, sparse windows
 and irregular observation intervals limit inference; see the model document.
 
-No automatic timeout/retry exists. Missing result/ready events leave QUERYING or
-WAITING: cancel or close/reopen AH as appropriate. Result completeness/paging and
+The optional single 30-second deadline stops a stalled batch; no retry is automatic.
+Without client timer support, close/reopen AH for a missing result/ready event.
+Result completeness/paging and
 request identity remain UNKNOWN. During validation avoid competing queries from
 the probe, other addons or default AH for the same item: a matching late event
 cannot be distinguished from the requested result. No auction identifier is used.
@@ -170,11 +194,8 @@ cannot be distinguished from the requested result. No auction identifier is used
 Run all suites from the repository root with Lua 5.1:
 
 ```text
-lua tests/marketpilot_spec.lua
-lua tests/statistics_spec.lua
-lua tests/history_spec.lua
-lua tests/ui_spec.lua
-lua probe/tests/probe_spec.lua
+python tools/test.py
+python tools/package.py
 ```
 
 On the development host these also run under Python's installed `lupa.lua51`
@@ -182,17 +203,17 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game standalone follow-up — not yet performed
+## In-game acceptance for 0.5.1
 
-The first live MP-05 batch and first-history display were confirmed in Issue #7;
-that report does not validate the new standalone mode.
+The original five-item batch and post-reload database retention were confirmed.
+The expanded 56-item batch and redesigned native panel need a fresh client check.
 
 Reload binding acceptance: scan on bank alt and record `Now` plus `/mp dbstatus`.
 Run `/reload` -> `/mp watch` without scanning: the same Now values, active key,
 counts and latest stored timestamps/medians should return. Then normal logout ->
 same-realm/same-faction main, away from AH -> `/mp watch` and `/mp dbstatus`: the
-same values must appear without a fresh query. This fix is verified offline only;
-return the debug output if the actual client still reports a different key/count.
+same values must appear without a fresh query. Production cross-character
+retention is still pending; return debug output if the key/count differs.
 
 1. On the bank alt, scan at AH and note values/counts. Close AH, then use
    `/mp watch`: centered read-only panel, stored detail/report, scan/refresh/cancel
@@ -210,13 +231,14 @@ return the debug output if the actual client still reports a different key/count
 
 ## Broader MP-05 checklist
 
-1. Install/reload, open AH: readable right-side panel, five category rows, names/
-   icons, collapse/expand, scrolling, no Lua errors, no automatic query. Verify
+1. Install/reload, open AH: readable right-side panel, category filters and six-row
+   pages, names/icons, Current/History tabs, collapse/expand, scrolling, no Lua errors,
+   no automatic query. Verify
    screen fit at your UI scale. History status should report account-wide storage.
-2. Click Scan Gathering Markets once. Observe 0/5 -> 5/5, each item sent once,
+2. Click Scan Gathering Markets once. Observe 0/56 -> 56/56, each item sent once,
    correct WAITING/QUERYING/DONE progress. Repeated batch/refresh clicks must not
    create another query. Selecting another row during batch should only change
-   detail. Record behavior for candidate Tin Ore/Silver Ore.
+   detail. Record unavailable/non-commodity beta items without inventing results.
 3. Compare Copper Ore, Peacebloom and Light Leather current quantities/prices/
    anomaly exclusions with the live AH. Empty results show known zero quantity
    but UNKNOWN price. A per-item API error must not save a fake observation.

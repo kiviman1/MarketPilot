@@ -3,7 +3,7 @@
 Private, lightweight WoW Forever market-intelligence terminal for Mining,
 Herbalism and Skinning commodities.
 
-## Current phase: MP-05
+## MP-05 — gathering market watch (0.5.1)
 
 Starting from the validated MP-03 side panel:
 
@@ -17,12 +17,21 @@ This branch has no Sale Assistant, Inventory, Pricing or posting workflow.
 No buying, selling, mail automation or whole-AH scan. MP-04/MP-04B are not its base.
 The user remains the decision maker; signals are descriptive observations.
 
-Install the complete `src/MarketPilot/` folder into the client's `Interface/AddOns/`.
+Open AH and click **Scan Gathering Markets**. The catalogue covers 56 Classic
+materials in Mining, Herbalism and Skinning. Filter by category, browse six rows
+per page, and use **Current**, **History** or **Market Report** for detail.
+Away from AH, `/mp watch` opens stored history read-only; `/mp report` opens the
+stored report directly. No login/background scan starts automatically.
+
+Install the complete `src/MarketPilot/` folder into the client's `Interface/AddOns/`,
+or run `python tools/package.py` and extract the ZIP's `MarketPilot/` folder there.
 See [production instructions and beta checklist](src/README.md),
 [architecture/schema](docs/ARCHITECTURE.md), [exact model](docs/MARKET_MODEL.md),
 and [confirmed versus unknown beta behavior](docs/API_FINDINGS.md).
-MP-05 is tested offline; its new persistence, batch flow and dashboard still require
-real Forever beta validation.
+The original five-item batch is live-validated. On 2026-09-28, the client also wrote
+ten complete snapshots plus the diagnostic canary to disk, and the user's
+post-reload check retained all ten snapshots and latest prices. The expanded catalogue,
+new panel layout and timeout handling still need client checks; see the checklist.
 
 ## Boundaries
 
@@ -45,14 +54,13 @@ Avoid concurrent same-item production/probe queries during validation.
 
 ## Tests
 
-From repository root using Lua 5.1:
+From the repository root:
 
 ```text
-lua tests/marketpilot_spec.lua
-lua tests/statistics_spec.lua
-lua tests/history_spec.lua
-lua tests/ui_spec.lua
-lua probe/tests/probe_spec.lua
+python tools/test.py
 ```
 
-Optimize for correctness, compact state, clear boundaries and easy beta iteration.
+The runner selects Lua 5.1 (or an installed `lupa.lua51`) and runs every production,
+persistence and probe suite in a fresh runtime. Individual `*_spec.lua` files can
+also be run with Lua 5.1. GitHub Actions runs the same checks and builds the clean
+TOC-only addon package. No Python or external Lua library is bundled in the addon.

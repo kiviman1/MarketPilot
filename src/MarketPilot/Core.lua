@@ -1,10 +1,12 @@
 local _, MP = ...
+local VERSION = "0.5.1"
+local debugEnabled = false
 
 local function debug(message)
     print("|cff66ccffMarketPilot:|r " .. message:gsub("|", "||"))
 end
 
-local panel, market, batch
+local panel, market, batch, advance
 local function computedMarketKey()
     local realmOK, realm = false, nil
     local factionOK, faction = false, nil
@@ -57,7 +59,8 @@ local function savedVariablesSnapshot(phase)
         .. " computedKey=" .. (computedMarketKey() or "UNKNOWN")
         .. " activeKey=" .. (db and db.status == "OK" and db.key or "UNKNOWN")
         .. " globalSameRoot=" .. (db and tostring(root == db.root) or "NO_DB")
-        .. " canary=" .. (canary ~= nil and "PRESENT" or "ABSENT") .. " value=" .. primitive(canary) }
+        .. " canary=" .. (canary ~= nil and "PRESENT" or "ABSENT") .. " value=" .. primitive(canary)
+        .. " version=" .. VERSION }
     for _, row in ipairs(rows) do
         lines[#lines + 1] = prefix .. " marketKey=" .. row.key .. " items=" .. row.items .. " snapshots=" .. row.snapshots
     end
@@ -85,11 +88,21 @@ local function markSavedVariables()
 end
 
 local function notify(message)
-    debug(message)
+    if debugEnabled or (MP.scanner and MP.scanner.state == "ERROR") then debug(message) end
     if market then market:Record(MP.scanner) end
     if panel then panel:Guard(panel.Update) end
 end
-local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, notify, time)
+-- Optional one-shot deadline, never a polling loop or a request retry.
+local schedule
+if type(C_Timer) == "table" and type(C_Timer.After) == "function" then
+    schedule = function(seconds, callback)
+        C_Timer.After(seconds, function()
+            local ok, err = pcall(function() callback(); if advance then advance() end end)
+            if not ok then MP.scanner:Fail("UNKNOWN: scan deadline failed: " .. tostring(err)) end
+        end)
+    end
+end
+local scanner = MP.Scanner.New(MP.AuctionAPI, MP.Items.testItemID, notify, time, schedule)
 MP.scanner = scanner
 batch = MP.BatchScanner.New(scanner, MP.Items)
 market = MP.Market.New(MP.Database.Open(nil), MP.Items)
@@ -129,8 +142,15 @@ local function databaseStatus()
     end
 end
 
-local function advance()
+advance = function()
+    local wasActive = batch.active
     batch:Advance()
+    if wasActive and not batch.active then
+        local failed = 0
+        for _, result in pairs(batch.results) do if result.state == "ERROR" then failed = failed + 1 end end
+        debug("batch " .. batch.state .. ": " .. batch.completed .. "/" .. batch.total
+            .. " finished; " .. failed .. " failed. Open Market Watch for results.")
+    end
     panel:Guard(panel.Update)
 end
 
@@ -202,10 +222,13 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "dbstatus" then databaseStatus()
         elseif command == "svdebug" then savedVariablesDebug()
         elseif command == "svmark" then markSavedVariables()
+        elseif command == "debug on" or command == "debug off" then
+            debugEnabled = command == "debug on"
+            debug("scan trace " .. (debugEnabled and "ON" or "OFF"))
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch") end
+        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp debug on/off") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end
 
-debug("loaded; open AH to scan, or /mp watch to browse stored history. /mp status for debugging")
+debug("v" .. VERSION .. " loaded; open AH to scan, or /mp watch for stored history. /mp debug on for scan trace")

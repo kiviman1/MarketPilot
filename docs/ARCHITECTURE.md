@@ -41,16 +41,27 @@ Core -> Scanner -> AuctionAPI
 Core records a completed sample before updating the panel. Queue advancement
 happens after the scanner event handler returns, not recursively from its state
 notifications. Analytics are cached per item until a scan/error changes them.
-Metadata, collapse and report rendering reuse the cache. No timers, OnUpdate,
-automatic login scans or scans with AH closed.
+Metadata, collapse and report rendering reuse the cache. No OnUpdate, automatic
+login scans or scans with AH closed. Core optionally injects one bounded deadline
+per accepted scan; this is failure handling, never polling/retry.
 
 ## Query lifecycle
 
 `IDLE -> WAITING -> QUERYING -> COLLECTING -> DONE`; errors enter ERROR. Next batch
 item starts only after completion or safe failure. Scanner checks readiness on
 each request and the system-ready event. Result-read errors are recorded and the
-batch proceeds; a failed dispatch is ambiguous and stops further requests until
-AH close/reopen. No automatic retry or timeout.
+batch proceeds. An item-key error before dispatch is safely isolated; once
+SendSearchQuery is attempted, a failure is ambiguous and stops further requests
+until AH close/reopen. There is no automatic retry.
+
+When `C_Timer.After` exists, Scanner starts one 30-second token-guarded deadline
+covering throttle wait and result wait. Any timeout stops the batch. Before
+dispatch, the user may explicitly retry; after dispatch, close/reopen is required.
+Old callbacks after completion/cancel/close are ignored. No timer starts another
+query or timer, and readiness remains event-driven. The scheduling function is
+injected, so deadline/cancellation behavior is deterministic in offline tests.
+Timer capability is reported by Scanner:Summary; absent support retains manual
+AH-close recovery. Actual beta scheduling remains a client check.
 
 Cancel discards the unsent queue. WAITING cancels immediately. A dispatched query
 drains its single reply and may save that requested observation; new requests
@@ -96,7 +107,8 @@ same-faction characters share history; other partitions are isolated. This does
 **not** assert Forever's actual faction/realm market-sharing semantics. Character
 name and guessed region are not included. Missing identity disables persistence,
 preserves saved data and reports UNKNOWN; scanning still works. Actual identity
-output and production cross-character persistence await beta validation. Changing
+output is recorded in API_FINDINGS; production cross-character persistence awaits
+beta validation. Changing
 sharing semantics later requires an explicit migration.
 
 An ADDON_LOADED binding is provisional even when its status is OK. Core recomputes
@@ -129,6 +141,15 @@ AH parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `
 MP-05 uses a 440 x 650 frame with native scrolling, mouse wheel and Up/Down buttons;
 collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
 anchor/render failures hide the panel and print diagnostics.
+
+Category filters and six-row paging keep the expanded catalogue bounded onscreen.
+Current and History are separate detail tabs. Market Report replaces the list
+and detail temporarily, with four items per section plus a remaining count.
+Close clears the explicit-watch preference. Screen clamping is guarded by method
+availability; the real client still needs font/scale/layout validation.
+`/mp report` can open a hidden standalone report directly. Normal scan trace is
+quiet; `/mp debug on/off` controls session-only verbose output, while errors and
+batch completion remain visible.
 
 `/mp watch` toggles that same frame anywhere. Away from AH its mode is STANDALONE,
 parent/anchor `UIParent`, `CENTER -> CENTER`, with a READ ONLY label. Item clicks
@@ -177,8 +198,12 @@ with a maturity summary; failed items are excluded from those lists. Reports use
 each item's latest retained scan, not a synchronized live market. The optional
 sparkline is deferred with a placeholder; numeric history is implemented.
 
-Catalogue remains 2770/2771/2775 (Mining), 2447 (Herbalism), 2318 (Skinning).
-Query values are live-confirmed for 2770/2771/2447/2318; 2775 rendered UNKNOWN in
-the first MP-05 batch. Additional beta level-range
-materials remain unconfigured until verified. See [MARKET_MODEL.md](MARKET_MODEL.md)
+Catalogue covers 56 known Classic raw materials: 14 Mining ores/stones, 31 herbs
+(including Wildvine/Bloodvine), 11 leather/scraps/hides. `Items.List(category)`
+returns a detached filtered list; Batch calls unfiltered List() and scans all.
+IDs are verified against the nexus-devs/wow-classic-items dataset, not guessed
+from display names. Client metadata supplies names/icons. Forever-specific
+availability and result paths beyond 2770/2771/2775/2447/2318 remain UNKNOWN.
+Crafted products, specialty scales/zone skins, gems and custom items are outside
+the configured catalogue. See [MARKET_MODEL.md](MARKET_MODEL.md)
 for exact mathematics and statistical limitations.

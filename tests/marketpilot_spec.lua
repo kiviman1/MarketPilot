@@ -61,6 +61,7 @@ local function fixture(configure)
         local chunk = assert(loadfile(ROOT .. name))
         setfenv(chunk, env)("MarketPilot", f.mp)
     end
+    if f.trace ~= false then env.SlashCmdList.MARKETPILOT("debug on") end
     f.scanner = f.mp.scanner
     function f:event(event, ...) self.frame.handler(self.frame, event, ...) end
     function f:command(command) self.env.SlashCmdList.MARKETPILOT(command) end
@@ -87,7 +88,7 @@ test("TOC order and static production boundaries", function()
         local source = read(ROOT .. name)
         assert(not source:find("auctionID", 1, true), name)
         assert(not source:find("OnUpdate", 1, true), name)
-        assert(not source:find("C_Timer", 1, true), name)
+        if name ~= "Core.lua" then assert(not source:find("C_Timer", 1, true), name) end
         for _, forbidden in ipairs({ "PostCommodity", "PostItem", "C_Container", "Sale Assistant" }) do
             assert(not source:find(forbidden, 1, true), name .. " " .. forbidden)
         end
@@ -101,7 +102,7 @@ test("initial IDLE, closed-AH rejection, strict configured command", function()
     local f = fixture()
     assert(f.scanner.state == "IDLE" and f.scanner.sample == nil)
     f:command("status")
-    assert(f:has("state=IDLE") and f:has("itemID=2770"))
+    assert(f:has("state=IDLE") and f:has("itemID=2770") and f:has("deadline=UNAVAILABLE"))
     f:command("scan")
     assert(f.sent == 0 and f.scanner.state == "ERROR")
     f:event("AUCTION_HOUSE_SHOW")
@@ -288,6 +289,171 @@ test("bad item key and explicit send rejection do not await results", function()
     local f = fixture(function(f) f.env.C_AuctionHouse.SendSearchQuery = function() return false end end)
     f:start(); f:complete()
     assert(f.scanner.state == "ERROR" and #f.reads == 0 and f:has("SendSearchQuery returned false"))
+end)
+
+test("normal scan trace is quiet by default while status and errors stay visible", function()
+    local f = fixture(function(f) f.trace = false end)
+    f:event("AUCTION_HOUSE_SHOW")
+    local before = #f.output
+    f:command("scan"); f:complete()
+    assert(f.scanner.state == "DONE" and #f.output == before)
+    f:command("status")
+    assert(#f.output == before + 1 and f:has("state=DONE"))
+    f:command("debug on"); f:command("scan"); f:complete()
+    assert(f:has("one query sent"))
+    f:command("debug off"); f.rows[1].unitPrice = nil
+    before = #f.output
+    f:command("scan"); f:complete()
+    assert(f.scanner.state == "ERROR" and #f.output == before + 1 and f:has("invalid/missing unitPrice"))
+end)
+
+test("pre-dispatch item key failure permits retry without reopening AH", function()
+    for _, key in ipairs({ false, {}, { itemID = 999 }, "key" }) do
+        local f = fixture()
+        local makeKey = f.env.C_AuctionHouse.MakeItemKey
+        f.env.C_AuctionHouse.MakeItemKey = function() return key end
+        f:start()
+        assert(f.scanner.state == "ERROR" and not f.scanner.uncertainQuery and f.sent == 0)
+        f.env.C_AuctionHouse.MakeItemKey = makeKey
+        f:command("scan"); f:complete()
+        assert(f.scanner.state == "DONE" and f.sent == 1)
+    end
+end)
+
+test("batch skips a proven pre-dispatch failure and dispatches the next configured item once", function()
+    local f = fixture(function(f)
+        f.env.C_AuctionHouse.MakeItemKey = function(id)
+            if id == 2770 then error("item key unavailable for this item") end
+            return { itemID = id }
+        end
+        f.env.C_AuctionHouse.SendSearchQuery = function(key, sorts, flag)
+            assert(key.itemID ~= 2770 and next(sorts) == nil and flag == true)
+            f.sent = f.sent + 1
+        end
+    end)
+    f:event("AUCTION_HOUSE_SHOW"); f:command("batch")
+    local batch, ids = f.mp.batch, f.mp.Items.List()
+    assert(batch.active and batch.completed == 1 and batch.pending == ids[2])
+    assert(batch.results[2770].state == "ERROR" and not f.scanner.uncertainQuery)
+    assert(f.scanner.state == "QUERYING" and f.scanner.itemID == ids[2] and f.sent == 1)
+    f:command("batch"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.sent == 1)
+end)
+
+test("ambiguous dispatch failure remains blocked even on an explicit send rejection", function()
+    local f = fixture(function(f)
+        f.env.C_AuctionHouse.SendSearchQuery = function() f.sent = f.sent + 1; return false end
+    end)
+    f:start(); f:command("scan"); f:command("batch")
+    f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.scanner.uncertainQuery and f.sent == 1 and not f.mp.batch.active)
+end)
+
+test("one scan deadline ends a throttle wait without dispatch or automatic retry", function()
+    local f, timers = fixture(), {}
+    f.scanner.schedule = function(delay, callback)
+        assert(delay == 30); timers[#timers + 1] = callback
+    end
+    f.ready = false; f:start()
+    for _ = 1, 3 do f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY") end
+    assert(#timers == 1 and f.scanner.state == "WAITING" and f:has("deadline=30s"))
+    timers[1]()
+    assert(f.scanner.state == "ERROR" and not f.scanner.uncertainQuery and f.sent == 0)
+    assert(f:has("throttle wait timed out before dispatch"))
+    f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.sent == 0 and #timers == 1)
+    f:command("scan"); assert(f.sent == 1 and #timers == 2)
+end)
+
+test("result timeout blocks ambiguous retry and ignores late results until AH reopen", function()
+    local f, timers = fixture(), {}
+    f.scanner.schedule = function(_, callback) timers[#timers + 1] = callback end
+    f:start(); timers[1]()
+    assert(f.scanner.state == "ERROR" and f.scanner.uncertainQuery and f.sent == 1)
+    f:complete(); f:command("scan"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.sent == 1 and #f.reads == 0 and #timers == 1)
+    f:event("AUCTION_HOUSE_CLOSED"); f:event("AUCTION_HOUSE_SHOW")
+    f:command("scan"); f:complete()
+    assert(f.sent == 2 and f.scanner.state == "DONE" and not f.scanner.uncertainQuery)
+end)
+
+test("deadline callbacks cannot alter completed cancelled or subsequent scans", function()
+    local f, timers = fixture(), {}
+    f.scanner.schedule = function(_, callback) timers[#timers + 1] = callback end
+    f:start(); f:complete()
+    timers[1](); assert(f.scanner.state == "DONE")
+    f:command("scan"); timers[1]()
+    assert(f.scanner.state == "QUERYING" and f.sent == 2 and #timers == 2)
+    f:event("AUCTION_HOUSE_CLOSED"); timers[2]()
+    assert(f.scanner.state == "IDLE" and not f.scanner.uncertainQuery)
+    f.ready = false; f:event("AUCTION_HOUSE_SHOW"); f:command("scan")
+    f.scanner:CancelWaiting(); timers[3]()
+    assert(f.scanner.state == "IDLE" and f.sent == 2)
+end)
+
+test("deadline scheduling failure is explicit and sends no query", function()
+    local f = fixture()
+    f.scanner.schedule = function() error("timer fixture failure") end
+    f:start()
+    assert(f.scanner.state == "ERROR" and not f.scanner.uncertainQuery and f.sent == 0)
+    assert(f:has("timer fixture failure"))
+end)
+
+test("Core deadline wiring finalizes an ambiguous batch timeout without a second query", function()
+    local timers = {}
+    local f = fixture(function(f)
+        f.env.C_Timer = { After = function(delay, callback)
+            assert(delay == 30); timers[#timers + 1] = callback
+        end }
+    end)
+    f:event("AUCTION_HOUSE_SHOW"); f:command("batch")
+    assert(f.mp.batch.active and #timers == 1 and f.sent == 1)
+    timers[1]()
+    assert(not f.mp.batch.active and f.mp.batch.state == "UNKNOWN: reopen AH")
+    assert(f.mp.batch.completed == 1 and f.mp.batch.results[2770].state == "ERROR")
+    assert(f.scanner.uncertainQuery and f.sent == 1)
+    timers[1](); f:complete(); f:command("batch")
+    assert(f.sent == 1 and #timers == 1)
+end)
+
+test("Core deadline wiring stops a throttle-timeout batch without chained deadlines or queries", function()
+    local timers = {}
+    local f = fixture(function(f)
+        f.env.C_Timer = { After = function(_, callback) timers[#timers + 1] = callback end }
+    end)
+    f.ready = false; f:event("AUCTION_HOUSE_SHOW"); f:command("batch")
+    timers[1]()
+    assert(not f.mp.batch.active and f.mp.batch.completed == 1 and not f.scanner.uncertainQuery)
+    assert(f.mp.batch.state == "TIMEOUT: throttle not ready")
+    assert(f.scanner.state == "ERROR" and #timers == 1 and f.sent == 0)
+    timers[1]()
+    f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.mp.batch.completed == 1 and #timers == 1 and f.sent == 0)
+    f:command("batch") -- Safe manual retry; no dispatch happened before timeout.
+    assert(f.mp.batch.active and f.scanner.state == "QUERYING" and #timers == 2 and f.sent == 1)
+    assert(f.scanner.stopBatchReason == nil)
+end)
+
+test("global scan failures stop the batch after one item without a query or automatic retry", function()
+    for _, kind in ipairs({ "missing API", "unknown readiness", "blocked event", "timer failure" }) do
+        local f, starts = fixture(), 0
+        local start, originalAPI = f.scanner.Start, f.env.C_AuctionHouse.MakeItemKey
+        f.scanner.Start = function(self, id) starts = starts + 1; return start(self, id) end
+        if kind == "missing API" then f.env.C_AuctionHouse.MakeItemKey = nil
+        elseif kind == "unknown readiness" then f.ready = "UNKNOWN"
+        elseif kind == "blocked event" then f.scanner.blockedReason = "UNKNOWN: missing required event"
+        else f.scanner.schedule = function() error("fixture timer unavailable") end end
+        f:event("AUCTION_HOUSE_SHOW"); f:command("batch")
+        assert(starts == 1 and f.sent == 0 and f.mp.batch.completed == 1, kind)
+        assert(not f.mp.batch.active and not f.mp.batch.advancing and f.scanner.stopBatchReason, kind)
+        assert(f.mp.batch.results[2770].state == "ERROR" and not f.scanner.uncertainQuery, kind)
+        f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:complete()
+        assert(starts == 1 and f.sent == 0 and f.mp.batch.completed == 1, kind)
+        f.env.C_AuctionHouse.MakeItemKey = originalAPI
+        f.ready, f.scanner.blockedReason, f.scanner.schedule = true, nil, nil
+        f:command("batch") -- Explicit retry after repairing the global prerequisite.
+        assert(starts == 2 and f.sent == 1 and f.mp.batch.active and f.scanner.stopBatchReason == nil, kind)
+    end
 end)
 
 test("exact integer boundary and summed-quantity overflow", function()

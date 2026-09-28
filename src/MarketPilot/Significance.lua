@@ -11,16 +11,29 @@ local function twoSided(z)
     return math.max(0, math.min(1, 2 * tail))
 end
 
+local function sampleCount(list)
+    if type(list) ~= "table" then return nil end
+    local count, last = 0, 0
+    for index, value in pairs(list) do
+        if not M.Integer(index, 1) or not M.Finite(value) or value <= 0 then return nil end
+        count, last = count + 1, math.max(last, index)
+    end
+    if count ~= last then return nil end
+    return count
+end
+
 function S.Compare(recent, baseline)
-    local result = { status = "INSUFFICIENT", recentCount = #recent, baselineCount = #baseline }
+    local n, m = sampleCount(recent), sampleCount(baseline)
+    local result = { status = "UNKNOWN", recentCount = n, baselineCount = m }
+    if not n or not m then return result end
+    result.status = "INSUFFICIENT"
     local rows = {}
     for group, list in ipairs({ recent, baseline }) do
         for _, value in ipairs(list) do
-            if not M.Finite(value) or value <= 0 then result.status = "UNKNOWN"; return result end
             rows[#rows + 1] = { value = value, recent = group == 1 }
         end
     end
-    local n, m, N = #recent, #baseline, #rows
+    local N = #rows
     if n < 3 or m < 7 then return result end
     table.sort(rows, function(a, b) return a.value < b.value end)
     local rankSum, tieSum, i = 0, 0, 1

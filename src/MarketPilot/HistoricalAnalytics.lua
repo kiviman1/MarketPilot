@@ -37,11 +37,13 @@ function H.Analyze(history, current)
     local result = { status = "INSUFFICIENT", maturity = "NEW", count = 0, windows = {},
         trend7d = { status = "INSUFFICIENT" }, trend30d = { status = "INSUFFICIENT" },
         volatility = { status = "INSUFFICIENT" }, significance = { status = "INSUFFICIENT" } }
-    if not current or not M.Integer(current.t, 0) then result.status = "UNKNOWN"; return result end
+    if type(history) ~= "table" or type(current) ~= "table" or not M.Integer(current.t, 0) then
+        result.status = "UNKNOWN"; return result
+    end
     local now, byTime = current.t, {}
     -- One observation per timestamp; later input wins. Current is not its own baseline.
     for _, row in ipairs(history) do
-        if M.Integer(row.t, 0) and row.t <= now and row.t >= now - 60 * DAY
+        if type(row) == "table" and M.Integer(row.t, 0) and row.t <= now and row.t >= now - 60 * DAY
             and M.Integer(row.cleanMedian, 1) then byTime[row.t] = row end
     end
     byTime[now] = M.Integer(current.cleanMedian, 1) and current or nil

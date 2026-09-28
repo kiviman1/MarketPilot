@@ -23,6 +23,7 @@ function Batch:Advance()
             self.results[self.pending] = { state = self.scanner.state, error = self.scanner.error }
             self.completed, self.pending = self.completed + 1, nil
             if self.scanner.uncertainQuery then self.active, self.state = false, "UNKNOWN: reopen AH"; break end
+            if self.scanner.stopBatchReason then self.active, self.state = false, self.scanner.stopBatchReason; break end
         end
         if self.completed >= self.total then self.active, self.state = false, "DONE"; break end
         self.pending = self.queue[self.completed + 1]

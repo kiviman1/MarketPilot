@@ -2,7 +2,7 @@
 ## Title: MarketPilot
 ## Notes: MP-05 gathering market intelligence for Forever beta
 ## Author: Kivanc / MarketPilot
-## Version: 0.5.0
+## Version: 0.5.1
 ## SavedVariables: MarketPilotDB
 
 Items.lua

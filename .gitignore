@@ -6,3 +6,5 @@ Thumbs.db
 .idea/
 WTF/
 SavedVariables/
+dist/
+__pycache__/

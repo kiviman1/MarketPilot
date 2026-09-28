@@ -20,6 +20,7 @@ local function fixture(configure)
         f.objects[#f.objects + 1] = w
         function w:GetObjectType() return self.kind end
         function w:SetParent(parent) self.parent = parent end
+        function w:SetClampedToScreen(value) self.clamped = value end
         function w:ClearAllPoints() self.point = nil end
         function w:EnableMouseWheel(value) self.mouseWheel = value end
         function w:SetScrollChild(child) self.child = child end
@@ -40,6 +41,7 @@ local function fixture(configure)
         function w:Disable() self.enabled = false end
         function w:EnableMouse(value) self.mouse = value end
         function w:SetText(value) self.text = value end
+        function w:SetWordWrap(value) self.wordWrap = value end
         function w:SetJustifyH(value) self.justify = value end
         function w:SetJustifyV(value) self.justifyV = value end
         function w:SetTexture(value) self.texture = value end
@@ -100,6 +102,14 @@ local function fixture(configure)
         for _, w in ipairs(recipients) do if w.scripts.OnEvent then w.scripts.OnEvent(w, event, ...) end end
     end
     function f:open() self:event("AUCTION_HOUSE_SHOW") end
+    function f:select(id, force)
+        if self.panel.reportMode then self.panel.reportButton:Click() end
+        self.panel:SetCategory("All")
+        for index, itemID in ipairs(self.mp.Items.List()) do
+            if itemID == id then self.panel:Page(math.ceil(index / 6) - self.panel.page); break end
+        end
+        self.panel.rows[id]:Click(force)
+    end
     function f:complete(id) self:event("COMMODITY_SEARCH_RESULTS_UPDATED", id or self.scanner.itemID) end
     function f:has(text)
         for _, line in ipairs(self.output) do if line:find(text, 1, true) then return true end end
@@ -163,7 +173,7 @@ end)
 test("click scans selected item once; refresh and debug use same selection", function()
     local f = fixture()
     f:open()
-    f.panel.rows[2447]:Click()
+    f:select(2447)
     assert(f.scanner.itemID == 2447 and f.panel.view.itemID == 2447 and f.sent[1] == 2447)
     assert(f.panel.view.name == "Client item 2447" and f.panel.rows[2447].icon.texture == 12447)
     assert(f.panel.rows[2447].selection.shown and not f.panel.rows[2770].selection.shown)
@@ -177,14 +187,14 @@ end)
 test("waiting/querying repeated clicks cannot change item or send parallel queries", function()
     local f = fixture()
     f.ready = false
-    f:open(); f.panel.rows[2770]:Click()
+    f:open(); f:select(2770)
     assert(f.panel.view.state == "WAITING" and not f.panel.scan.enabled and not f.panel.rows[2771].enabled)
-    f.panel.rows[2771]:Click(true); f.panel.scan:Click(true)
+    f:select(2771, true); f.panel.scan:Click(true)
     assert(f.scanner.itemID == 2770 and #f.sent == 0)
     f.ready = true
     f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
     f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
-    f.panel.rows[2318]:Click(true); f.panel.scan:Click(true)
+    f:select(2318, true); f.panel.scan:Click(true)
     assert(#f.sent == 1 and f.scanner.itemID == 2770 and f.panel.view.state == "QUERYING")
     local sawCollecting = false
     local original = f.env.C_AuctionHouse.GetCommoditySearchResultInfo
@@ -242,7 +252,7 @@ end)
 test("new selection clears stale display and ignores previous-item results", function()
     local f = fixture()
     f:open(); f.panel.scan:Click(); f:complete()
-    f.panel.rows[2771]:Click()
+    f:select(2771)
     assert(f.panel.view.lowest == "UNKNOWN" and f.panel.view.itemID == 2771)
     local reads = f.reads
     f:complete(2770)
@@ -353,7 +363,7 @@ test("batch serializes all configured queries and persists progress without raw 
     assert(f.mp.batch.active and #f.sent == 1 and f.mp.batch.completed == 0)
     f.panel.batchButton:Click(true); f.panel.scan:Click(true)
     f.env.SlashCmdList.MARKETPILOT("scan")
-    f.panel.rows[2447]:Click()
+    f:select(2447)
     assert(#f.sent == 1 and f.panel.selectedItemID == 2447 and f.scanner.itemID == ids[1])
     for i, id in ipairs(ids) do
         assert(#f.sent == i and f.sent[i] == id and f.scanner.state == "QUERYING")
@@ -363,7 +373,7 @@ test("batch serializes all configured queries and persists progress without raw 
         assert(#history == 1 and history[1].cleanMedian == 200 and history[1].priceLevels == nil)
     end
     assert(not f.mp.batch.active and f.mp.batch.state == "DONE" and #f.sent == #ids)
-    assert(f.panel.progress.text:find("5 / 5", 1, true) and f.panel.selectedItemID == 2447)
+    assert(f.panel.progress.text:find((#ids .. " / " .. #ids), 1, true) and f.panel.selectedItemID == 2447)
     assert(f.env.MarketPilotDB.schema == 1)
     f.env.SlashCmdList.MARKETPILOT("scan"); assert(f.sent[#f.sent] == 2447)
 end)
@@ -463,7 +473,7 @@ test("report includes configured supported facts only and exposes sparse-history
     local f = fixture(); f:open(); f.panel.reportButton:Click()
     assert(f.panel.reportText.shown and not f.panel.detail.shown)
     assert(f.panel.reportText.text:find("No supported observations", 1, true))
-    assert(f.panel.reportText.text:find("NEW: 5", 1, true))
+    assert(f.panel.reportText.text:find(("NEW: " .. #f.mp.Items.List()), 1, true))
     seed(f, 2770, { 30 * DAY, 29 * DAY, DAY, 0 }, { 200, 200, 200, 100 })
     seed(f, 2447, { 2 * DAY, 1.5 * DAY, DAY, DAY / 2, 0 }, { 100, 120, 144, 173, 207 })
     seed(f, 99999, { 30 * DAY, 29 * DAY, DAY, 0 }, { 200, 200, 200, 100 })
@@ -570,10 +580,10 @@ end)
 test("standalone item selection changes stored detail without query or history mutation", function()
     local f = watchFixture(); local before = clone(f.env.MarketPilotDB); f:watch()
     local itemID = f.scanner.itemID
-    f.panel.rows[2447]:Click()
+    f:select(2447)
     assert(f.panel.selectedItemID == 2447 and f.scanner.itemID == itemID and f.scanner.state == "IDLE")
     assert(f.panel.view.cleanMedian == "0g 0s 27c" and f.panel.rows[2447].selection.shown)
-    f.panel.rows[2318]:Click()
+    f:select(2318)
     assert(f.panel.view.cleanMedian == "UNKNOWN" and f.panel.view.quantity == "UNKNOWN")
     assert(f.panel.view.message:find("No stored observation", 1, true))
     f:complete(); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
@@ -587,7 +597,7 @@ test("standalone Market Report reuses cached stored analytics and supported fact
     assert(f.panel.reportText:IsVisible() and not f.panel.detail.shown)
     assert(f.panel.reportText.text:find("Client item 2770: 30d percentile 0", 1, true))
     assert(f.panel.reportText.text:find("30D READY: 1", 1, true))
-    f.panel.reportButton:Click(); f.panel.rows[2447]:Click()
+    f.panel.reportButton:Click(); f:select(2447)
     assert(f.panel.detail:IsVisible() and not f:has("duplicated math"))
     same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
 end)
@@ -595,7 +605,7 @@ end)
 test("watch toggles closed and events cannot resurrect it; reopening reuses the frame", function()
     local f = watchFixture(); f:watch()
     local panel, n, before = f.panel.frame, #f.objects, clone(f.env.MarketPilotDB)
-    f.panel.rows[2447]:Click(); f.panel.toggle:Click()
+    f:select(2447); f.panel.toggle:Click()
     f:watch(); assert(not panel:IsShown() and not f.panel.watchRequested)
     f:event("GET_ITEM_INFO_RECEIVED", 2447, true); f:event("AUCTION_HOUSE_CLOSED")
     f:event("ADDON_LOADED", "Other"); assert(not panel:IsShown())
@@ -612,7 +622,7 @@ test("watch frame docks into AH mode and existing scans/batches remain functiona
     assert(f.panel.mode == "AH" and panel.parent == f.env.AuctionHouseFrame and panel.point[1] == "TOPLEFT")
     assert(panel.point[3] == "TOPRIGHT" and panel.point[4] == 8 and #f.objects == n + 1)
     assert(f.panel.scan.enabled and f.panel.batchButton.enabled and f.ahCalls == 0)
-    f.panel.rows[2447]:Click(); assert(f.sent[1] == 2447); f:complete()
+    f:select(2447); assert(f.sent[1] == 2447); f:complete()
     f.panel.batchButton:Click(); assert(#f.sent == 2 and f.mp.batch.active and f.panel.cancelButton.enabled)
     f.panel.cancelButton:Click(); f:complete()
     assert(not f.mp.batch.active and #f.sent == 2)
@@ -635,11 +645,11 @@ test("AH close restores explicitly requested watch and preserves history without
 end)
 
 test("reload fixture reads stored history outside AH without rescanning", function()
-    local first = watchFixture(); first:watch(); first.panel.rows[2447]:Click()
+    local first = watchFixture(); first:watch(); first:select(2447)
     local saved = clone(first.env.MarketPilotDB)
     local reloaded = watchFixture(function(f) f.env.MarketPilotDB = clone(saved) end)
     assert(reloaded.panel.frame == nil)
-    reloaded:watch(); reloaded.panel.rows[2447]:Click()
+    reloaded:watch(); reloaded:select(2447)
     assert(reloaded.panel.view.cleanMedian == "0g 0s 27c" and reloaded.ahCalls == 0)
     same(reloaded.env.MarketPilotDB, saved)
 end)
@@ -723,7 +733,7 @@ end)
 test("batch saved root survives reload and main login with early-to-stable key changes", function()
     local bank = fixture(); bank:open(); bank.panel.batchButton:Click()
     for _, id in ipairs(bank.mp.Items.List()) do bank:complete(id) end
-    assert(bank.mp.batch.state == "DONE" and #bank.sent == 5)
+    assert(bank.mp.batch.state == "DONE" and #bank.sent == #bank.mp.Items.List())
     local saved, bankKey = clone(bank.env.MarketPilotDB), bank.mp.market.db.key
     for _, character in ipairs({ "BankAlt", "MainCharacter" }) do
         local f = watchFixture(function(f)
@@ -935,6 +945,161 @@ test("svdebug tolerates malformed globals and counts raw containers without meta
     assert(observation(lines, "CURRENT", "marketKey=malformed"):find("items=UNKNOWN snapshots=UNKNOWN", 1, true))
     assert(observation(lines, "CURRENT", "marketKey=incomplete"):find("items=1 snapshots=UNKNOWN", 1, true))
     assert(calls == 0 and f.env.MarketPilotDB == root and f.scanner.state == "IDLE")
+end)
+
+
+test("complete Classic catalogue has unique IDs and detached category lists", function()
+    local f, seen = fixture(), {}
+    assert(#f.mp.Items.List() == 56)
+    for category, expected in pairs({ Mining = 14, Herbalism = 31, Skinning = 11 }) do
+        local ids = f.mp.Items.List(category)
+        assert(#ids == expected)
+        for _, id in ipairs(ids) do assert(not seen[id] and f.mp.Items.Contains(id)); seen[id] = true end
+        ids[1] = -1
+        assert(f.mp.Items.List(category)[1] ~= -1)
+    end
+    assert(#f.mp.Items.List("unknown") == 0 and not f.mp.Items.Contains(99999))
+end)
+
+test("category paging is bounded, retains selection, and never starts a query", function()
+    local f = watchFixture(); f:watch()
+    local before, selected = clone(f.env.MarketPilotDB), f.panel.selectedItemID
+    local visited = {}
+    for _, category in ipairs(f.mp.Items.categories) do
+        f.panel.categoryButtons[category.name]:Click()
+        assert(f.panel.category == category.name and f.panel.page == 1)
+        local categorySet = {}; for _, id in ipairs(category.itemIDs) do categorySet[id] = true end
+        repeat
+            local visible = 0
+            for id, row in pairs(f.panel.rows) do
+                if row:IsVisible() then
+                    visible = visible + 1; assert(categorySet[id] and not visited[id]); visited[id] = true
+                    assert(row.point[5] <= -51 and row.point[5] - row.height >= -188)
+                    local prior = row.text.point[4] + row.text.width
+                    for _, key in ipairs({ "now", "change", "trend", "percentile", "supply", "maturity" }) do
+                        local col = row.columns[key]
+                        assert(col.point[4] >= prior and col.point[4] + col.width <= 426)
+                        prior = col.point[4] + col.width
+                    end
+                end
+            end
+            assert(visible >= 1 and visible <= 6)
+            if not f.panel.next.enabled then break end
+            f.panel.next:Click()
+        until false
+        local page = f.panel.page; f.panel.next:Click(true); assert(f.panel.page == page)
+        f.panel:Page(-100); assert(f.panel.page == 1 and not f.panel.previous.enabled)
+    end
+    local total = 0; for _ in pairs(visited) do total = total + 1 end
+    assert(total == 56 and f.panel.selectedItemID == selected and f.ahCalls == 0)
+    same(f.env.MarketPilotDB, before)
+end)
+
+test("current/history tabs and report are reachable without a catalogue-length scroll", function()
+    local f = watchFixture(); f:watch()
+    assert(f.panel.frame.clamped and f.panel.currentDetails:IsVisible() and not f.panel.historicalDetails:IsVisible())
+    assert(f.panel.detail.point[5] == -302 and f.panel.scrollLimit < 120)
+    f.panel.historyButton:Click()
+    assert(f.panel.historicalDetails:IsVisible() and not f.panel.currentDetails:IsVisible())
+    assert(f.panel.historyValues.median30.text == "0g 2s 0c")
+    f.panel.reportButton:Click()
+    assert(f.panel.reportText:IsVisible() and not f.panel.catalogue:IsVisible() and not f.panel.detail:IsVisible())
+    assert(f.panel.reportButton.text == "Market Watch" and f.panel.scroll:GetVerticalScroll() == 0)
+    f.panel.reportButton:Click()
+    assert(f.panel.catalogue:IsVisible() and f.panel.historicalDetails:IsVisible())
+    f.panel.closeButton:Click()
+    assert(not f.panel.frame:IsVisible() and not f.panel.watchRequested and f.ahCalls == 0)
+end)
+
+test("report limits each section and discloses overflow instead of clipping all-market text", function()
+    local f = fixture()
+    local report = { rising = {}, cheap = {}, volatile = {}, significant = {}, maturity = { NEW = 56, EARLY = 0, ["7D READY"] = 0, ["30D READY"] = 0 } }
+    for i = 1, 20 do report.rising[i] = { itemID = i, data = { analytics = { trend7d = { pctPerDay = i } } } } end
+    local text = f.view.Report(report, { Metadata = function(id) return { name = "Material " .. id } end })
+    assert(text:find("Material 4:", 1, true) and not text:find("Material 5:", 1, true))
+    assert(text:find("+ 16 more; browse Market Watch", 1, true))
+end)
+
+test("report command opens stored report directly outside AH without writes or API calls", function()
+    local f = watchFixture(); local before = clone(f.env.MarketPilotDB)
+    assert(not f.panel.frame)
+    f.env.SlashCmdList.MARKETPILOT("report")
+    assert(f.panel.mode == "STANDALONE" and f.panel.reportText:IsVisible() and f.panel.reportMode)
+    assert(f.panel.reportText.text:find("Client item 2770: 30d percentile 0", 1, true))
+    f.panel.closeButton:Click(); f.env.SlashCmdList.MARKETPILOT("report")
+    assert(f.panel.reportText:IsVisible() and not f.panel.scan.enabled and f.ahCalls == 0)
+    same(f.env.MarketPilotDB, before)
+end)
+
+test("normal scanning is quiet, optional debug exposes trace, errors stay visible", function()
+    local f = fixture(); f:open()
+    f.env.SlashCmdList.MARKETPILOT("debug off")
+    local quiet = #f.output
+    f.panel.scan:Click(); f:complete()
+    assert(#f.output == quiet and f.scanner.state == "DONE")
+    f.env.SlashCmdList.MARKETPILOT("debug on")
+    local tracing = #f.output
+    f.panel.scan:Click(); f:complete()
+    assert(#f.output > tracing)
+    f.env.SlashCmdList.MARKETPILOT("debug off")
+    local errors = #f.output
+    f.rows[1].unitPrice = nil; f.panel.scan:Click(); f:complete()
+    assert(f.scanner.state == "ERROR" and #f.output > errors)
+end)
+
+
+test("report and wrapped recovery guidance fit the reachable scroll content", function()
+    local f = watchFixture(); f:watch()
+    assert(f.panel.message.wordWrap and f.panel.exclusion.wordWrap and f.panel.message.height == 54)
+    assert(not f.panel.rows[2770].text.wordWrap)
+    local messageBottom = -f.panel.detail.point[5] - f.panel.currentDetails.point[5]
+        - f.panel.message.point[5] + f.panel.message.height
+    assert(f.panel.body.height >= messageBottom)
+    f.panel.reportButton:Click()
+    local reportBottom = -f.panel.reportText.point[5] + f.panel.reportText.height
+    assert(f.panel.body.height >= reportBottom)
+    f.panel:Scroll(10000)
+    assert(f.panel.scroll:GetVerticalScroll() == f.panel.scrollLimit)
+    assert(f.panel.scroll:GetVerticalScroll() + f.panel.scroll.height >= reportBottom)
+    f.panel.reportButton:Click()
+    assert(f.panel.scroll:GetVerticalScroll() == 0 and f.panel.body.height == f.panel.watchContentHeight)
+end)
+
+test("ambiguous query disables manual scans with explicit recovery while stored browsing works", function()
+    local f = fixture(); f:open()
+    f.env.C_AuctionHouse.SendSearchQuery = function() error("ambiguous dispatch fixture") end
+    f.panel.scan:Click()
+    assert(f.scanner.uncertainQuery and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
+    assert(not f.panel.rows[2771].enabled and f.panel.scan.text == "Close and reopen AH")
+    assert(f.panel.view.message:find("Close and reopen", 1, true))
+    local forbidden = function() error("disabled action entered scanner") end
+    f.scanner.Start, f.mp.batch.Start = forbidden, forbidden
+    f:select(2771, true); f.panel.scan:Click(true); f.panel.batchButton:Click(true)
+    assert(not f:has("disabled action entered scanner"))
+    f.panel.watchRequested = true; f:event("AUCTION_HOUSE_CLOSED"); f:select(2447)
+    assert(f.panel.mode == "STANDALONE" and f.panel.selectedItemID == 2447)
+end)
+
+test("empty market gives clear factual explanation without fabricating prices", function()
+    local f = fixture(); f:open()
+    assert(f.panel.progress.text == "Ready | 56 materials")
+    f.rows = {}; f.panel.scan:Click(); f:complete()
+    assert(f.panel.view.message:find("No price levels returned", 1, true))
+    assert(f.panel.view.cleanMedian == "UNKNOWN" and f.panel.view.quantity == "0")
+    f.panel.watchRequested = true; f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.view.message:find("No price levels in stored observation", 1, true))
+end)
+
+test("blocked scanner disables batch and manual actions including forced clicks", function()
+    local f = fixture(); f:open()
+    f.scanner.blockedReason = "UNKNOWN: required event registration failed"
+    f.panel:Update()
+    assert(not f.panel.batchButton.enabled and not f.panel.scan.enabled and not f.panel.rows[2770].enabled)
+    local calls = 0
+    f.mp.batch.Start = function() calls = calls + 1 end
+    f.scanner.Start = function() calls = calls + 1 end
+    f.panel.batchButton:Click(true); f.panel.scan:Click(true); f:select(2771, true)
+    assert(calls == 0 and #f.sent == 0)
 end)
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

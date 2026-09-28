@@ -43,16 +43,18 @@ function AuctionAPI:IsReady()
 end
 
 function AuctionAPI:QueryCommodity(itemID)
-    if not integer(itemID, 1) then return false, "UNKNOWN: invalid itemID" end
+    if not integer(itemID, 1) then return false, "UNKNOWN: invalid itemID", false end
     local ok, itemKey = call("MakeItemKey", itemID)
-    if not ok then return false, itemKey end
+    if not ok then return false, itemKey, false end
     if type(itemKey) ~= "table" or rawget(itemKey, "itemID") ~= itemID then
-        return false, "UNKNOWN: MakeItemKey returned an invalid/mismatched key"
+        return false, "UNKNOWN: MakeItemKey returned an invalid/mismatched key", false
     end
     -- The MP-00 confirmed signature; no alternate calls or synthesized keys.
     local sent, result = call("SendSearchQuery", itemKey, {}, true)
-    if not sent then return false, result end
-    if result == false then return false, "UNKNOWN: SendSearchQuery returned false" end
+    -- The third return distinguishes a safe pre-dispatch failure from a send
+    -- whose server-side outcome is unknown. Never retry an ambiguous dispatch.
+    if not sent then return false, result, true end
+    if result == false then return false, "UNKNOWN: SendSearchQuery returned false", true end
     -- A successful call is not completion; Scanner must wait for a matching event.
     return true
 end
