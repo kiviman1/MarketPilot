@@ -263,10 +263,12 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.5 (no release build yet)
+## In-game acceptance for 0.5.5
 
-No release package/tag is created in this follow-up. CI validates the source
-manifest without producing a ZIP. A further user experiment is pending.
+The 0.5.5 release archive is built explicitly with `python tools/package.py`.
+CI validates the source manifest without producing a ZIP. The archive contains
+only the `MarketPilot/` runtime folder; SavedVariables remain in the client.
+This checklist records in-client checks separately from offline test coverage.
 
 1. Check the logo in the character-screen addon list. The minimap icon should
    enter the EllesmereUI container; open/close the container, AH and Settings

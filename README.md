@@ -39,9 +39,12 @@ Missing values use plain labels: **No scan**, **No price**, **Needs history** an
 **Failed**. A dash in a historical column means more observations are needed.
 Missing prices never become zero. Technical state names remain in debug output.
 
-Install the complete `src/MarketPilot/` folder, including `Media/Icon.tga`, into
-the client's `Interface/AddOns/`. This revision prepares source only: no new
-build/package or release is produced pending the user's final client experiment.
+Install the `MarketPilot/` folder from `MarketPilot-0.5.5.zip` into the client's
+`Interface/AddOns/`. The archive contains only the addon runtime and its icon;
+existing account history and settings are not bundled or replaced.
+Build the upload archive from this checkout with `python tools/package.py`.
+The resulting file is `dist/MarketPilot-0.5.5.zip`; see the
+[release notes](docs/RELEASE_NOTES_0.5.5.md) for the upload changelog.
 The upload logo is [assets/MarketPilot-CurseForge.png](assets/MarketPilot-CurseForge.png),
 a 512 x 512 PNG exported from the addon's own vector mark. Recreate it without an
 addon build using `python tools/render_icon.py --png-only --size 512 <output.png>`.
