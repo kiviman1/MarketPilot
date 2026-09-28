@@ -52,6 +52,22 @@ Normal scan trace is quiet; errors and batch completion remain visible.
 Debug helpers: `/mp status`, `/mp dbstatus`, `/mp svdebug`, `/mp svmark`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
 
+## Thirty-day demo
+
+Use **30d Demo** in the panel or `/mp demo on` to preview a month of simulated
+markets. All 56 items get 91 observations through the normal calculation pipeline;
+the panel prominently labels the data as DEMO. No live query or real history write
+occurs. Activation waits for an active scan to finish or be cancelled/drained.
+**Exit demo**, `/mp demo off`, or reload discards the in-memory preview. Closing
+the window alone does not exit demo. [Scenario expectations and checks](../docs/DEMO.md)
+include rising/falling/flat prices, supply shifts and a 100000g outlier.
+
+Normal display labels now distinguish **No scan** (no observation), **No price**
+(a scan returned no usable price), **Failed** (scan/storage error), and
+**Needs history** (metric guards not met). Historical table dashes are explained
+in the footer. Raw UNKNOWN/INSUFFICIENT codes remain internal/debug-only; prices
+are never invented to fill a gap.
+
 ## Stored Market Watch anywhere
 
 Use `/mp watch` away from AH to toggle a standalone, read-only window centered on
@@ -135,7 +151,7 @@ TOC order:
 ```text
 Items.lua / AuctionAPI.lua / Statistics.lua
 HistoryMath.lua / Database.lua / Significance.lua / HistoricalAnalytics.lua
-MarketSignal.lua / Scanner.lua / BatchScanner.lua / Market.lua
+MarketSignal.lua / Scanner.lua / BatchScanner.lua / Market.lua / Demo.lua
 UIViewModel.lua / UI.lua / Core.lua
 ```
 
@@ -203,10 +219,15 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.1
+## In-game acceptance for 0.5.2
+
+Demo check: open `/mp demo on` away from AH; inspect Copper, Silver, Iron, Mithril
+and Peacebloom against [DEMO.md](../docs/DEMO.md). Confirm the banner, disabled
+scans, Current/History/Report and no technical missing-value labels. Open/close AH
+while in demo: still read-only. Exit or reload: real item counts/history remain.
 
 The original five-item batch and post-reload database retention were confirmed.
-The expanded 56-item batch and redesigned native panel need a fresh client check.
+The expanded 56-item batch, redesigned native panel and demo need a fresh client check.
 
 Reload binding acceptance: scan on bank alt and record `Now` plus `/mp dbstatus`.
 Run `/reload` -> `/mp watch` without scanning: the same Now values, active key,

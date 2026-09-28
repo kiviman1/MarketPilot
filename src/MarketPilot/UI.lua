@@ -29,7 +29,7 @@ function UI.New(scanner, items, report, market, batch, clock)
 end
 
 function UI:Warn(message)
-    if self.lastWarning ~= message then self.report("panel UNKNOWN: " .. message) end
+    if self.lastWarning ~= message then self.report("Panel could not be shown: " .. message) end
     self.lastWarning = message
 end
 
@@ -45,7 +45,7 @@ function UI:Toggle()
 end
 
 function UI:IsReadOnly()
-    return self.mode == "STANDALONE" or not self.scanner.ahOpen
+    return self.demoInfo ~= nil or self.mode == "STANDALONE" or not self.scanner.ahOpen
 end
 
 function UI:ToggleWatch()
@@ -65,7 +65,7 @@ end
 function UI:ClickItem(itemID)
     if not self.items.Contains(itemID) then return false end
     self.reportMode = false
-    if self.mode == "STANDALONE" or self.batch.active then
+    if self:IsReadOnly() or self.batch.active then
         self.selectedItemID = itemID; self:Update(); return true
     end
     if not self.scanner.ahOpen or self.scanner:IsActive()
@@ -170,6 +170,10 @@ function UI:Create(anchor)
     self.reportButton = button("Market Report", self.body, 318, -2, 110, self.ToggleReport)
     self.progress = label(self.body, "", 14, -30, WIDTH - 28)
     self.historyStatus = label(self.body, "", 14, -50, WIDTH - 28)
+    self.historyStatus:SetWidth(326)
+    self.demoButton = button("30d Demo", self.body, 346, -45, 80, function(s)
+        if s.onDemo then s.onDemo() end
+    end)
     self.catalogue = CreateFrame("Frame", nil, self.body)
     self.catalogue:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -72)
     self.catalogue:SetSize(WIDTH, 218)
@@ -193,7 +197,7 @@ function UI:Create(anchor)
             row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
             row.text = label(row, "", 26, -4, 113)
             row.columns = {}
-            for _, col in ipairs(COLUMNS) do row.columns[col[2]] = label(row, "?", col[3] - 14, -4, col[4]) end
+            for _, col in ipairs(COLUMNS) do row.columns[col[2]] = label(row, "-", col[3] - 14, -4, col[4]) end
             row.selection = row:CreateTexture(nil, "BACKGROUND")
             row.selection:SetAllPoints(row)
             row.selection:SetColorTexture(0.2, 0.35, 0.48, 0.65)
@@ -227,7 +231,7 @@ function UI:Create(anchor)
     y = 0
     for _, field in ipairs(FIELDS) do
         label(self.currentDetails, field[1], 14, y, 135)
-        self.values[field[2]] = label(self.currentDetails, "UNKNOWN", 155, y, WIDTH - 169)
+        self.values[field[2]] = label(self.currentDetails, "Not scanned", 155, y, WIDTH - 169)
         self.values[field[2]]:SetJustifyH("RIGHT")
         self.values[field[2]]:SetHeight(20)
         y = y - 20
@@ -235,7 +239,7 @@ function UI:Create(anchor)
     y = 0
     for _, field in ipairs(HISTORY_FIELDS) do
         label(self.historicalDetails, field[1], 14, y, 135)
-        self.historyValues[field[2]] = label(self.historicalDetails, "INSUFFICIENT", 155, y, WIDTH - 169)
+        self.historyValues[field[2]] = label(self.historicalDetails, "Needs history", 155, y, WIDTH - 169)
         y = y - 20
     end
     self.exclusion = label(self.currentDetails, "", 14, -205, WIDTH - 28)
@@ -251,7 +255,7 @@ function UI:Create(anchor)
     self.scrollLimit = contentHeight - (HEIGHT - 74)
     self.footer = CreateFrame("Frame", nil, panel)
     self.footer:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0); self.footer:SetSize(WIDTH, 30)
-    label(self.footer, "^ rising  v falling  = stable  ? insufficient", 14, -8, 328)
+    label(self.footer, "^ rising  v falling  = stable  - needs history", 14, -8, 328)
     button("Up", self.footer, 340, -3, 40, function(s) s:Scroll(-250) end)
     button("Down", self.footer, 384, -3, 42, function(s) s:Scroll(250) end)
 end
@@ -295,7 +299,7 @@ function UI:Close()
 end
 
 function UI:Update()
-    local readOnly = self.mode == "STANDALONE"
+    local readOnly = self.demoInfo ~= nil or self.mode == "STANDALONE"
     self.view = MP.UIViewModel.Build(self.scanner, self.selectedItemID, self.items.Metadata(self.selectedItemID), readOnly)
     if not self.frame or not self.anchor then return end
     if not self.scanner.ahOpen and not readOnly then self:Close(); return end
@@ -312,12 +316,17 @@ function UI:Update()
         view.range = MP.UIViewModel.Money(s.q1) .. " - " .. MP.UIViewModel.Money(s.q3)
         view.quantity, view.levels = tostring(s.totalQuantity), tostring(s.levelCount)
         view.suspicious, view.extreme = tostring(s.suspicious), tostring(s.extreme)
-        view.sufficient = s.anomalySufficient and "SUFFICIENT" or "INSUFFICIENT"
+        view.sufficient = MP.UIViewModel.Anomaly(s.anomalySufficient)
         view.exclusion = "Extreme outliers excluded: " .. s.extreme .. ". Suspicious retained."
         view.message = s.levelCount == 0 and "No price levels in stored observation; see History for scan age."
             or "Stored observation; see History for last scan age."
     end
-    if data.error and not self.scanner.uncertainQuery then view.message = data.error end
+    if data.error and not self.scanner.uncertainQuery then view.message = MP.UIViewModel.Error(data.error) end
+    if self.demoInfo then
+        local scenario = self.demoInfo.items[self.selectedItemID]
+        view.message = scenario and ("Demo: " .. scenario.label .. ". " .. scenario.description) or "Simulated market data."
+        view.buttonText, view.scanEnabled = "Demo - scans disabled", false
+    end
     if self.reportMode then self.detail:Hide(); self.catalogue:Hide(); self.reportText:Show()
         self.reportText:SetText(MP.UIViewModel.Report(self.market:Report(), self.items))
     else self.reportText:Hide(); self.detail:Show(); self.catalogue:Show() end
@@ -333,15 +342,21 @@ function UI:Update()
     local history = MP.UIViewModel.History(data, self.clock())
     history.changes = history.change7 .. " / " .. history.change30
     for key, widget in pairs(self.historyValues) do widget:SetText(history[key]) end
-    self.progress:SetText(readOnly and "READ ONLY | Stored history | Open AH to scan"
+    self.progress:SetText(self.demoInfo and "DEMO ONLY | 30 simulated days | No live scans"
+        or (readOnly and "READ ONLY | Stored history | Open AH to scan"
         or (self.batch.state == "IDLE" and self.scanner.state == "IDLE" and "Ready | " .. #self.items.List() .. " materials"
-        or self.batch.state .. "  " .. self.batch.completed .. " / " .. self.batch.total .. "  |  " .. self.scanner.state))
-    self.historyStatus:SetText(self.market.db.status == "OK" and "History: account-wide / realm + faction" or self.market.db.error)
+        or MP.UIViewModel.State(self.batch.state) .. "  " .. self.batch.completed .. " / " .. self.batch.total
+            .. "  |  " .. MP.UIViewModel.State(self.scanner.state))))
+    self.historyStatus:SetText(self.demoInfo and "Synthetic examples - real history untouched"
+        or (self.market.db.status == "OK" and "History: account-wide / realm + faction" or MP.UIViewModel.Error(self.market.db.error)))
+    self.demoButton:SetText(self.demoInfo and "Exit demo" or "30d Demo")
     if self:IsReadOnly() or self.batch.active or self.scanner:IsActive() or self.scanner.uncertainQuery
         or self.scanner.blockedReason then self.batchButton:Disable() else self.batchButton:Enable() end
     if not self:IsReadOnly() and self.batch.active then self.cancelButton:Enable() else self.cancelButton:Disable() end
     self.name:SetText(view.name)
-    for _, field in ipairs(FIELDS) do self.values[field[2]]:SetText(view[field[2]]) end
+    for _, field in ipairs(FIELDS) do
+        self.values[field[2]]:SetText(field[2] == "state" and MP.UIViewModel.State(view.state) or view[field[2]])
+    end
     self.message:SetText(view.message)
     self.exclusion:SetText(view.exclusion)
     self.scan:SetText(view.buttonText)

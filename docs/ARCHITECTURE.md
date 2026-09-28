@@ -23,6 +23,7 @@ There is no Inventory, Pricing, Sale Assistant or posting module. Probe is uncha
 | Significance | Pure two-sided, tie-corrected Mann-Whitney normal approximation |
 | MarketSignal | Pure descriptive price/trend/supply/volatility labels |
 | Market | Completed-scan persistence, latest observations, cached analytics and report aggregation |
+| Demo | Deterministic synthetic scans -> isolated in-memory Market using the same calculation pipeline |
 | UIViewModel | Presentation: formatting, missing-data labels, watch/detail/report text |
 | UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
 
@@ -36,6 +37,7 @@ Core -> Scanner -> AuctionAPI
                -> MarketSignal
      -> UI -> Scanner / BatchScanner / Market / Items
            -> UIViewModel -> HistoryMath (numeric guard only)
+     -> Demo -> Statistics / Database / Market
 ```
 
 Core records a completed sample before updating the panel. Queue advancement
@@ -136,6 +138,25 @@ uses Database.Open's preserveHistory option: validate/bind without pruning eithe
 partition. Reads return detached whitelist copies.
 
 ## Dashboard and report
+
+`/mp demo on/off` or the panel's 30d Demo/Exit demo button switches only the UI's
+Market source. Core retains its real Market instance for Record, identity binding
+and persistence diagnostics. Demo creates a fresh private root (never a saved
+root) and 91 synthetic observations per configured item spanning 30 days. It uses
+the existing statistics, database snapshot and historical model implementations.
+Scenario descriptions accompany current detail. No model formulas/thresholds change.
+
+The demo flag forces read-only actions even when docked beside an open AH. Core
+also blocks scan/batch/cancel/svmark commands. Activation refuses an active batch,
+pending scan or uncertain dispatch. Exit restores the real Market and previous
+watch preference; reload never restores a demo. Closing the panel does not disable
+the mode. Demo/history caches stay separate, and no synthetic root is assigned to
+the saved global. See [DEMO.md](DEMO.md) for fixtures and expected results.
+
+UIViewModel translates missing/failed facts into plain display labels and short
+actionable explanations; internal UNKNOWN/INSUFFICIENT and other enums remain
+unchanged. Watch columns use No scan, No price, Failed and explained history dashes.
+Known zero counts remain zero; unknown prices remain absent internally.
 
 AH parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
 MP-05 uses a 440 x 650 frame with native scrolling, mouse wheel and Up/Down buttons;

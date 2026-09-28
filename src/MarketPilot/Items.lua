@@ -40,7 +40,7 @@ end
 local metadata, loading = {}, {}
 function Items.Metadata(itemID)
     if metadata[itemID] then return metadata[itemID] end
-    local info = { name = "Item #" .. itemID .. " (UNKNOWN)", icon = "Interface\\Icons\\INV_Misc_QuestionMark", known = false }
+    local info = { name = "Item #" .. itemID .. " (loading)", icon = "Interface\\Icons\\INV_Misc_QuestionMark", known = false }
     metadata[itemID] = info
     -- Display metadata only. Guard both documented client namespace variants.
     local getInfo = type(C_Item) == "table" and C_Item.GetItemInfo or GetItemInfo

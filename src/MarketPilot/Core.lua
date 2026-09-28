@@ -1,5 +1,5 @@
 local _, MP = ...
-local VERSION = "0.5.1"
+local VERSION = "0.5.2"
 local debugEnabled = false
 
 local function debug(message)
@@ -142,6 +142,36 @@ local function databaseStatus()
     end
 end
 
+local function setDemo(enabled)
+    if enabled == (panel.demoInfo ~= nil) then return true end
+    if enabled then
+        if batch.active or scanner:IsActive() or scanner.uncertainQuery then
+            debug("Finish the current scan first; close AH if a query is still pending. Demo was not opened.")
+            return false
+        end
+        if type(MP.Demo) ~= "table" or type(MP.Demo.Create) ~= "function" then
+            debug("Demo module not loaded. Install the complete addon folder and restart the client.")
+            return false
+        end
+        local preview, info = MP.Demo.Create(time(), MP.Items)
+        if not preview then debug("Demo could not open: " .. tostring(info)); return false end
+        panel.demoPreviousWatch = panel.watchRequested
+        panel.market, panel.demoInfo = preview, info
+        panel.watchRequested, panel.collapsed = true, false
+        panel:Guard(panel.Open)
+        debug("Demo ON: 30 days of simulated markets. Real history is unchanged. /mp demo off to exit.")
+    else
+        panel.market, panel.demoInfo = market, nil
+        panel.watchRequested = panel.demoPreviousWatch
+        panel.demoPreviousWatch = nil
+        if scanner.ahOpen or panel.watchRequested then panel:Guard(panel.Open)
+        else panel:Guard(panel.Update); panel:Close() end
+        debug("Demo OFF: real market history restored.")
+    end
+    return true
+end
+panel.onDemo = function() return setDemo(panel.demoInfo == nil) end
+
 advance = function()
     local wasActive = batch.active
     batch:Advance()
@@ -208,6 +238,9 @@ SLASH_MARKETPILOT1 = "/mp"
 SlashCmdList.MARKETPILOT = function(input)
     local ok, err = pcall(function()
         local command = (input or ""):match("^%s*(.-)%s*$"):lower()
+        if panel.demoInfo and (command == "scan" or command == "batch" or command == "cancel" or command == "svmark") then
+            debug("Demo is read-only; /mp demo off returns to the real market."); return
+        end
         if panel.mode == "STANDALONE" and (command == "scan" or command == "batch" or command == "cancel") then
             debug("read-only watch; open AH to scan"); return
         end
@@ -222,11 +255,14 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "dbstatus" then databaseStatus()
         elseif command == "svdebug" then savedVariablesDebug()
         elseif command == "svmark" then markSavedVariables()
+        elseif command == "demo" then setDemo(panel.demoInfo == nil)
+        elseif command == "demo on" then setDemo(true)
+        elseif command == "demo off" then setDemo(false)
         elseif command == "debug on" or command == "debug off" then
             debugEnabled = command == "debug on"
             debug("scan trace " .. (debugEnabled and "ON" or "OFF"))
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp debug on/off") end
+        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp demo on/off | /mp debug on/off") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end

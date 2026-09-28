@@ -3,7 +3,7 @@
 Private, lightweight WoW Forever market-intelligence terminal for Mining,
 Herbalism and Skinning commodities.
 
-## MP-05 — gathering market watch (0.5.1)
+## MP-05 — gathering market watch (0.5.2)
 
 Starting from the validated MP-03 side panel:
 
@@ -22,6 +22,16 @@ materials in Mining, Herbalism and Skinning. Filter by category, browse six rows
 per page, and use **Current**, **History** or **Market Report** for detail.
 Away from AH, `/mp watch` opens stored history read-only; `/mp report` opens the
 stored report directly. No login/background scan starts automatically.
+
+For a model preview, use **30d Demo** or `/mp demo on`. It generates 30 days of
+simulated markets in memory and renders them through the same statistics,
+history and report modules. The DEMO banner stays visible; scanning is disabled.
+**Exit demo** or `/mp demo off` restores the real market. Reload also discards the
+demo. Real saved history is never seeded or replaced. See [expected demo results](docs/DEMO.md).
+
+Missing values use plain labels: **No scan**, **No price**, **Needs history** and
+**Failed**. A dash in a historical column means more observations are needed.
+Missing prices never become zero. Technical state names remain in debug output.
 
 Install the complete `src/MarketPilot/` folder into the client's `Interface/AddOns/`,
 or run `python tools/package.py` and extract the ZIP's `MarketPilot/` folder there.
