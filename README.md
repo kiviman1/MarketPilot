@@ -3,7 +3,7 @@
 Private, lightweight WoW Forever market-intelligence terminal for Mining,
 Herbalism and Skinning commodities.
 
-## MP-05 — gathering market watch (0.5.2)
+## MP-05 — gathering market watch (0.5.3, release preparation)
 
 Starting from the validated MP-03 side panel:
 
@@ -20,21 +20,23 @@ The user remains the decision maker; signals are descriptive observations.
 Open AH and click **Scan Gathering Markets**. The catalogue covers 56 Classic
 materials in Mining, Herbalism and Skinning. Filter by category, browse six rows
 per page, and use **Current**, **History** or **Market Report** for detail.
-Away from AH, `/mp watch` opens stored history read-only; `/mp report` opens the
-stored report directly. No login/background scan starts automatically.
+Away from AH, click the **minimap icon** or use `/mp watch` for stored history;
+drag its title to move the read-only window. `/mp report` opens the stored report.
+Right-click the minimap icon, click **Settings**, or use `/mp settings` for an
+independent settings window. Hide/show the icon or reset window positions there.
+AH opens the usual attached scan panel; closing AH returns an explicitly opened
+watch to its saved standalone position. No login/background scan starts automatically.
 
-For a model preview, use **30d Demo** or `/mp demo on`. It generates 30 days of
-simulated markets in memory and renders them through the same statistics,
-history and report modules. The DEMO banner stays visible; scanning is disabled.
-**Exit demo** or `/mp demo off` restores the real market. Reload also discards the
-demo. Real saved history is never seeded or replaced. See [expected demo results](docs/DEMO.md).
+Runtime demo mode has been removed. Synthetic month-long market scenarios remain
+offline regression fixtures only; the addon always displays real observations.
 
 Missing values use plain labels: **No scan**, **No price**, **Needs history** and
 **Failed**. A dash in a historical column means more observations are needed.
 Missing prices never become zero. Technical state names remain in debug output.
 
-Install the complete `src/MarketPilot/` folder into the client's `Interface/AddOns/`,
-or run `python tools/package.py` and extract the ZIP's `MarketPilot/` folder there.
+Install the complete `src/MarketPilot/` folder, including `Media/Icon.tga`, into
+the client's `Interface/AddOns/`. This revision prepares source only: no new
+build/package or release is produced pending the user's final client experiment.
 See [production instructions and beta checklist](src/README.md),
 [architecture/schema](docs/ARCHITECTURE.md), [exact model](docs/MARKET_MODEL.md),
 and [confirmed versus unknown beta behavior](docs/API_FINDINGS.md).
@@ -72,5 +74,6 @@ python tools/test.py
 
 The runner selects Lua 5.1 (or an installed `lupa.lua51`) and runs every production,
 persistence and probe suite in a fresh runtime. Individual `*_spec.lua` files can
-also be run with Lua 5.1. GitHub Actions runs the same checks and builds the clean
-TOC-only addon package. No Python or external Lua library is bundled in the addon.
+also be run with Lua 5.1. GitHub Actions runs the same checks and validates the
+source manifest with `python tools/package.py --check`; neither check creates a
+build/package. No Python or external Lua library is bundled in the addon.

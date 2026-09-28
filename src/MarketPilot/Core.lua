@@ -1,5 +1,5 @@
 local _, MP = ...
-local VERSION = "0.5.2"
+local VERSION = "0.5.3"
 local debugEnabled = false
 
 local function debug(message)
@@ -109,8 +109,32 @@ market = MP.Market.New(MP.Database.Open(nil), MP.Items)
 MP.batch, MP.market = batch, market
 panel = MP.UI.New(scanner, MP.Items, debug, market, batch, time)
 MP.panel = panel
+local preferences = MP.Preferences.New(nil)
+local settings, minimap
+panel.preferences = preferences
+settings = MP.Settings.New(preferences, {
+    onChanged = function() minimap:Refresh() end,
+    onResetPositions = function() panel:Guard(panel.ResetPosition) end,
+}, debug)
+minimap = MP.Minimap.New(preferences, {
+    watch = function() panel:Guard(panel.ToggleWatch) end,
+    settings = function() settings:Toggle() end,
+}, debug)
+panel.onSettings = function() settings:Toggle() end
+MP.preferences, MP.settings, MP.minimap = preferences, settings, minimap
 local frame = CreateFrame("Frame")
 local startupError
+
+local function initializePreferences()
+    -- Bind without seeding or replacing the saved root. Explicit UI changes are
+    -- the only preference writes; market history remains owned by Database.
+    local ok, err = pcall(function()
+        preferences:Bind(MarketPilotDB)
+        settings:Refresh()
+        minimap:Refresh()
+    end)
+    if not ok then debug("Window settings unavailable: " .. tostring(err)) end
+end
 
 local function initializeHistory()
     local key = computedMarketKey()
@@ -142,36 +166,6 @@ local function databaseStatus()
     end
 end
 
-local function setDemo(enabled)
-    if enabled == (panel.demoInfo ~= nil) then return true end
-    if enabled then
-        if batch.active or scanner:IsActive() or scanner.uncertainQuery then
-            debug("Finish the current scan first; close AH if a query is still pending. Demo was not opened.")
-            return false
-        end
-        if type(MP.Demo) ~= "table" or type(MP.Demo.Create) ~= "function" then
-            debug("Demo module not loaded. Install the complete addon folder and restart the client.")
-            return false
-        end
-        local preview, info = MP.Demo.Create(time(), MP.Items)
-        if not preview then debug("Demo could not open: " .. tostring(info)); return false end
-        panel.demoPreviousWatch = panel.watchRequested
-        panel.market, panel.demoInfo = preview, info
-        panel.watchRequested, panel.collapsed = true, false
-        panel:Guard(panel.Open)
-        debug("Demo ON: 30 days of simulated markets. Real history is unchanged. /mp demo off to exit.")
-    else
-        panel.market, panel.demoInfo = market, nil
-        panel.watchRequested = panel.demoPreviousWatch
-        panel.demoPreviousWatch = nil
-        if scanner.ahOpen or panel.watchRequested then panel:Guard(panel.Open)
-        else panel:Guard(panel.Update); panel:Close() end
-        debug("Demo OFF: real market history restored.")
-    end
-    return true
-end
-panel.onDemo = function() return setDemo(panel.demoInfo == nil) end
-
 advance = function()
     local wasActive = batch.active
     batch:Advance()
@@ -192,6 +186,7 @@ local function onEvent(event, itemID, success)
         observeStartup(event .. " pre-bind")
         initializeHistory()
         observeStartup(event .. " post-bind")
+        initializePreferences()
         if panel.anchor then panel:Guard(panel.Update) end
         return
     end
@@ -200,12 +195,14 @@ local function onEvent(event, itemID, success)
             observeStartup("ADDON_LOADED pre-bind")
             initializeHistory()
             observeStartup("ADDON_LOADED post-bind")
+            initializePreferences()
         end
         if scanner.ahOpen and (not panel.anchor or panel.mode ~= "AH") then panel:Open() end
         return
     end
     if startupError then return end
-    if event == "AUCTION_HOUSE_SHOW" then initializeHistory(); scanner:OnHouseOpened(); panel:Open()
+    if event == "AUCTION_HOUSE_SHOW" then
+        initializeHistory(); initializePreferences(); scanner:OnHouseOpened(); panel:Open()
     elseif event == "AUCTION_HOUSE_CLOSED" then batch:Cancel(); scanner:OnHouseClosed(); panel:OnHouseClosed()
     elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then scanner:OnReady()
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID) end
@@ -238,9 +235,6 @@ SLASH_MARKETPILOT1 = "/mp"
 SlashCmdList.MARKETPILOT = function(input)
     local ok, err = pcall(function()
         local command = (input or ""):match("^%s*(.-)%s*$"):lower()
-        if panel.demoInfo and (command == "scan" or command == "batch" or command == "cancel" or command == "svmark") then
-            debug("Demo is read-only; /mp demo off returns to the real market."); return
-        end
         if panel.mode == "STANDALONE" and (command == "scan" or command == "batch" or command == "cancel") then
             debug("read-only watch; open AH to scan"); return
         end
@@ -252,19 +246,17 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "cancel" then batch:Cancel(); panel:Guard(panel.Update)
         elseif command == "report" then panel:Guard(panel.ToggleReport)
         elseif command == "watch" then panel:Guard(panel.ToggleWatch)
+        elseif command == "settings" then settings:Toggle()
         elseif command == "dbstatus" then databaseStatus()
         elseif command == "svdebug" then savedVariablesDebug()
         elseif command == "svmark" then markSavedVariables()
-        elseif command == "demo" then setDemo(panel.demoInfo == nil)
-        elseif command == "demo on" then setDemo(true)
-        elseif command == "demo off" then setDemo(false)
         elseif command == "debug on" or command == "debug off" then
             debugEnabled = command == "debug on"
             debug("scan trace " .. (debugEnabled and "ON" or "OFF"))
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp demo on/off | /mp debug on/off") end
+        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp settings | /mp debug on/off") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end
 
-debug("v" .. VERSION .. " loaded; open AH to scan, or /mp watch for stored history. /mp debug on for scan trace")
+debug("v" .. VERSION .. " loaded; minimap: watch / settings. /mp watch for history; /mp settings for options.")

@@ -45,7 +45,32 @@ function UI:Toggle()
 end
 
 function UI:IsReadOnly()
-    return self.demoInfo ~= nil or self.mode == "STANDALONE" or not self.scanner.ahOpen
+    return self.mode == "STANDALONE" or not self.scanner.ahOpen
+end
+
+function UI:StartDrag()
+    if self.mode ~= "STANDALONE" or self.scanner.ahOpen or not self.frame or not self.frame:IsShown() then return false end
+    self.frame:StartMoving()
+    self.dragging = true
+    return true
+end
+
+function UI:StopDrag()
+    if not self.dragging then return end
+    self.dragging = false
+    self.frame:StopMovingOrSizing()
+    if self.mode == "STANDALONE" and self.preferences then
+        local position = MP.Preferences.CapturePosition(self.frame, UIParent)
+        if position then self.preferences:Set("watchPosition", position) end
+    end
+end
+
+function UI:ResetPosition()
+    self:StopDrag()
+    if self.preferences then self.preferences:Set("watchPosition", nil) end
+    if self.frame and self.mode == "STANDALONE" then
+        MP.Preferences.ApplyPosition(self.frame, UIParent, nil)
+    end
 end
 
 function UI:ToggleWatch()
@@ -133,6 +158,7 @@ function UI:Create(anchor)
     panel:SetSize(WIDTH, HEIGHT)
     if panel.SetClampedToScreen then panel:SetClampedToScreen(true) end
     panel:EnableMouse(true)
+    panel:SetScript("OnHide", function() self:Guard(self.StopDrag) end)
     local background = panel:CreateTexture(nil, "BACKGROUND")
     background:SetAllPoints(panel)
     background:SetColorTexture(0.035, 0.045, 0.06, 0.97)
@@ -140,7 +166,16 @@ function UI:Create(anchor)
     accent:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
     accent:SetSize(WIDTH, 2)
     accent:SetColorTexture(0.65, 0.52, 0.27, 1)
-    label(panel, "MARKETPILOT - MARKET WATCH", 14, -13, WIDTH - 100, "GameFontNormal")
+    -- Only the header starts a standalone drag; all body controls keep their
+    -- own mouse behavior and the AH-docked panel is never movable.
+    self.titleBar = CreateFrame("Frame", nil, panel)
+    self.titleBar:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
+    self.titleBar:SetSize(WIDTH - 82, 40)
+    self.titleBar:EnableMouse(true)
+    self.titleBar:RegisterForDrag("LeftButton")
+    self.titleBar:SetScript("OnDragStart", function() self:Guard(self.StartDrag) end)
+    self.titleBar:SetScript("OnDragStop", function() self:Guard(self.StopDrag) end)
+    label(self.titleBar, "MARKETPILOT - MARKET WATCH", 14, -13, WIDTH - 100, "GameFontNormal")
     self.toggle = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     self.toggle:SetSize(28, 24)
     self.toggle:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -44, -9)
@@ -171,8 +206,8 @@ function UI:Create(anchor)
     self.progress = label(self.body, "", 14, -30, WIDTH - 28)
     self.historyStatus = label(self.body, "", 14, -50, WIDTH - 28)
     self.historyStatus:SetWidth(326)
-    self.demoButton = button("30d Demo", self.body, 346, -45, 80, function(s)
-        if s.onDemo then s.onDemo() end
+    self.settingsButton = button("Settings", self.body, 346, -45, 80, function(s)
+        if s.onSettings then s.onSettings() end
     end)
     self.catalogue = CreateFrame("Frame", nil, self.body)
     self.catalogue:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -72)
@@ -262,6 +297,7 @@ end
 
 function UI:Open()
     if not self.scanner.ahOpen and not self.watchRequested then return false end
+    self:StopDrag()
     local mode = self.scanner.ahOpen and "AH" or "STANDALONE"
     -- Top-level parents only; switching mode never queries or changes history.
     local anchor, anchorName
@@ -276,9 +312,10 @@ function UI:Open()
         if not self.frame then self:Create(anchor) end
         self.frame:Hide()
         self.frame:SetParent(anchor)
+        self.frame:SetMovable(mode == "STANDALONE")
         self.frame:ClearAllPoints()
         if mode == "AH" then self.frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 8, 0)
-        else self.frame:SetPoint("CENTER", anchor, "CENTER", 0, 0) end
+        else MP.Preferences.ApplyPosition(self.frame, UIParent, self.preferences and self.preferences:Get("watchPosition")) end
         self.anchor, self.mode = anchor, mode
         self.items.InvalidateMetadata()
         self:Update()
@@ -295,11 +332,12 @@ function UI:Open()
 end
 
 function UI:Close()
+    self:StopDrag()
     if self.frame then self.frame:Hide() end
 end
 
 function UI:Update()
-    local readOnly = self.demoInfo ~= nil or self.mode == "STANDALONE"
+    local readOnly = self.mode == "STANDALONE"
     self.view = MP.UIViewModel.Build(self.scanner, self.selectedItemID, self.items.Metadata(self.selectedItemID), readOnly)
     if not self.frame or not self.anchor then return end
     if not self.scanner.ahOpen and not readOnly then self:Close(); return end
@@ -322,11 +360,6 @@ function UI:Update()
             or "Stored observation; see History for last scan age."
     end
     if data.error and not self.scanner.uncertainQuery then view.message = MP.UIViewModel.Error(data.error) end
-    if self.demoInfo then
-        local scenario = self.demoInfo.items[self.selectedItemID]
-        view.message = scenario and ("Demo: " .. scenario.label .. ". " .. scenario.description) or "Simulated market data."
-        view.buttonText, view.scanEnabled = "Demo - scans disabled", false
-    end
     if self.reportMode then self.detail:Hide(); self.catalogue:Hide(); self.reportText:Show()
         self.reportText:SetText(MP.UIViewModel.Report(self.market:Report(), self.items))
     else self.reportText:Hide(); self.detail:Show(); self.catalogue:Show() end
@@ -342,14 +375,11 @@ function UI:Update()
     local history = MP.UIViewModel.History(data, self.clock())
     history.changes = history.change7 .. " / " .. history.change30
     for key, widget in pairs(self.historyValues) do widget:SetText(history[key]) end
-    self.progress:SetText(self.demoInfo and "DEMO ONLY | 30 simulated days | No live scans"
-        or (readOnly and "READ ONLY | Stored history | Open AH to scan"
+    self.progress:SetText(readOnly and "READ ONLY | Stored history | Open AH to scan"
         or (self.batch.state == "IDLE" and self.scanner.state == "IDLE" and "Ready | " .. #self.items.List() .. " materials"
         or MP.UIViewModel.State(self.batch.state) .. "  " .. self.batch.completed .. " / " .. self.batch.total
-            .. "  |  " .. MP.UIViewModel.State(self.scanner.state))))
-    self.historyStatus:SetText(self.demoInfo and "Synthetic examples - real history untouched"
-        or (self.market.db.status == "OK" and "History: account-wide / realm + faction" or MP.UIViewModel.Error(self.market.db.error)))
-    self.demoButton:SetText(self.demoInfo and "Exit demo" or "30d Demo")
+            .. "  |  " .. MP.UIViewModel.State(self.scanner.state)))
+    self.historyStatus:SetText(self.market.db.status == "OK" and "History: account-wide / realm + faction" or MP.UIViewModel.Error(self.market.db.error))
     if self:IsReadOnly() or self.batch.active or self.scanner:IsActive() or self.scanner.uncertainQuery
         or self.scanner.blockedReason then self.batchButton:Disable() else self.batchButton:Enable() end
     if not self:IsReadOnly() and self.batch.active then self.cancelButton:Enable() else self.cancelButton:Disable() end

@@ -20,6 +20,23 @@ local function fixture(configure)
         f.objects[#f.objects + 1] = w
         function w:GetObjectType() return self.kind end
         function w:SetParent(parent) self.parent = parent end
+        function w:SetMovable(value) self.movable = value end
+        function w:StartMoving() assert(self.movable); self.moving = true end
+        function w:StopMovingOrSizing() self.moving = false; self.stops = (self.stops or 0) + 1 end
+        function w:RegisterForDrag(...) self.dragButtons = { ... } end
+        function w:RegisterForClicks(...) self.clickButtons = { ... } end
+        function w:SetFrameStrata(value) self.strata = value end
+        function w:GetWidth() return self.width or 0 end
+        function w:GetHeight() return self.height or 0 end
+        function w:GetEffectiveScale() return self.scale or 1 end
+        function w:GetCenter()
+            if self.center then return self.center[1], self.center[2] end
+            if self.point and self.point[1] == "CENTER" then
+                local x, y = self.point[2]:GetCenter()
+                return x + self.point[4], y + self.point[5]
+            end
+            return 0, 0
+        end
         function w:SetClampedToScreen(value) self.clamped = value end
         function w:ClearAllPoints() self.point = nil end
         function w:EnableMouseWheel(value) self.mouseWheel = value end
@@ -34,7 +51,10 @@ local function fixture(configure)
         function w:SetWidth(width) self.width = width end
         function w:SetHeight(height) self.height = height end
         function w:Show() self.shown = true end
-        function w:Hide() self.shown = false end
+        function w:Hide()
+            local wasShown = self.shown; self.shown = false
+            if wasShown and self.scripts.OnHide then self.scripts.OnHide(self) end
+        end
         function w:IsShown() return self.shown end
         function w:IsVisible() return self.shown and (not self.parent or self.parent:IsVisible()) end
         function w:Enable() self.enabled = true end
@@ -45,17 +65,26 @@ local function fixture(configure)
         function w:SetJustifyH(value) self.justify = value end
         function w:SetJustifyV(value) self.justifyV = value end
         function w:SetTexture(value) self.texture = value end
+        function w:SetNormalTexture(value) self.normalTexture = value end
+        function w:SetHighlightTexture(value) self.highlightTexture = value end
+        function w:SetChecked(value) self.checked = value end
+        function w:GetChecked() return self.checked end
         function w:SetColorTexture(...) self.color = { ... } end
         function w:SetAllPoints(value) self.allPoints = value end
         function w:CreateFontString(_, _, font) local item = widget("FontString", self); item.font = font; return item end
         function w:CreateTexture() return widget("Texture", self) end
         function w:SetScript(event, callback)
-            assert(event == "OnEvent" or event == "OnClick" or event == "OnMouseWheel", "unexpected hook: " .. event)
+            assert(event == "OnEvent" or event == "OnClick" or event == "OnMouseWheel"
+                or event == "OnDragStart" or event == "OnDragStop" or event == "OnHide"
+                or event == "OnEnter" or event == "OnLeave" or event == "OnMouseDown", "unexpected hook: " .. event)
             self.scripts[event] = callback
         end
         function w:RegisterEvent(event) self.events[event] = true end
-        function w:Click(force)
-            if force or (self.enabled and self:IsVisible()) then return self.scripts.OnClick(self) end
+        function w:Click(force, button)
+            if force or (self.enabled and self:IsVisible()) then
+                if self.scripts.OnMouseDown then self.scripts.OnMouseDown(self, button or "LeftButton") end
+                return self.scripts.OnClick(self, button or "LeftButton")
+            end
         end
         return w
     end
@@ -68,6 +97,9 @@ local function fixture(configure)
     f.makeAnchor = function() env.AuctionHouseFrame = widget("Frame"); return env.AuctionHouseFrame end
     f.makeAnchor()
     env.UIParent = widget("Frame")
+    env.UIParent.center = { 960, 540 }
+    env.Minimap = widget("Frame", env.UIParent)
+    env.Minimap:SetSize(140, 140)
     env.print = function(line) f.output[#f.output + 1] = line end
     f.now = 4000000
     env.time = function() return f.now end
@@ -1153,139 +1185,168 @@ test("presentation helpers explain errors and maturity without changing underlyi
     assert(f.scanner.state == "IDLE" and #f.sent == 0)
 end)
 
-test("demo opens a disposable month for every item and never replaces the saved owner", function()
-    local f = watchFixture()
-    local root, real = f.env.MarketPilotDB, f.mp.market
-    local before = clone(root)
-    f.env.SlashCmdList.MARKETPILOT("demo on")
-    local demo = f.panel.market
-    assert(f.panel.demoInfo and demo ~= real and demo.db.root ~= root)
-    assert(f.mp.market == real and real.db.root == root and f.env.MarketPilotDB == root)
-    assert(f.panel.mode == "STANDALONE" and f.panel.frame:IsVisible() and f.panel:IsReadOnly())
-    assert(f.panel.progress.text:find("DEMO ONLY", 1, true))
-    assert(f.panel.historyStatus.text:find("real history untouched", 1, true))
-    for _, id in ipairs(f.mp.Items.List()) do
-        local data = demo:Get(id)
-        assert(#data.history == 91 and data.current.t == f.now)
-        assert(data.current.t - data.history[1].t == 30 * DAY)
-        assert(data.analytics.maturity == "30D READY")
-    end
-    f.env.SlashCmdList.MARKETPILOT("demo on") -- Idempotent; no new random observations.
-    assert(f.panel.market == demo and f.ahCalls == 0 and #f.sent == 0)
-    same(root, before)
-end)
-
-test("demo blocks forced and slash scan actions while selection report and diagnostics remain usable", function()
-    local f = watchFixture(); f:watch(); f.makeAnchor(); f:open()
-    local before = clone(f.env.MarketPilotDB)
-    f.panel.demoButton:Click()
-    assert(f.panel.demoInfo and not f.panel.scan.enabled and not f.panel.batchButton.enabled and not f.panel.cancelButton.enabled)
-    local calls = 0
-    local function forbidden() calls = calls + 1; error("demo entered scan action") end
-    f.scanner.Start, f.mp.batch.Start, f.mp.batch.Cancel = forbidden, forbidden, forbidden
-    f.panel.scan:Click(true); f.panel.batchButton:Click(true); f.panel.cancelButton:Click(true)
-    for _, command in ipairs({ "scan", "batch", "cancel", "svmark" }) do f.env.SlashCmdList.MARKETPILOT(command) end
-    f:select(2447, true)
-    assert(f.panel.selectedItemID == 2447 and f.panel.view.cleanMedian == f.view.Money(f.panel.market:Get(2447).current.cleanMedian))
-    assert(f.panel.view.message:find("Demo:", 1, true))
-    f.panel.historyButton:Click(); f.panel.reportButton:Click()
-    assert(f.panel.reportText:IsVisible() and f.panel.reportText.text:find("Client item 2770", 1, true))
-    f.env.SlashCmdList.MARKETPILOT("dbstatus")
-    assert(f:has("itemID=2770 snapshots=4 latestTimestamp=4000000 latestCleanMedian=100"))
-    assert(observation(svdebug(f), "CURRENT"):find("globalSameRoot=true", 1, true))
-    assert(calls == 0 and f.ahCalls == 0 and #f.sent == 0)
-    same(f.env.MarketPilotDB, before)
-end)
-
-test("demo remains read-only across AH and player lifecycle events without changing real history", function()
+test("runtime demo is absent and legacy demo commands cannot alter data or create a preview", function()
     local f = watchFixture(); local before = clone(f.env.MarketPilotDB)
-    f.env.SlashCmdList.MARKETPILOT("demo on")
-    local demo, real = f.panel.market, f.mp.market
-    f.makeAnchor(); f:open()
-    assert(f.panel.mode == "AH" and f.panel.frame.parent == f.env.AuctionHouseFrame)
-    assert(f.panel.market == demo and f.panel:IsReadOnly() and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
-    f:event("PLAYER_LOGIN"); f:event("PLAYER_ENTERING_WORLD")
-    f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:complete(2770)
-    assert(f.panel.market == demo and f.mp.market == real and real.db.root == f.env.MarketPilotDB)
-    f:event("AUCTION_HOUSE_CLOSED")
-    assert(f.panel.frame:IsVisible() and f.panel.mode == "STANDALONE" and f.panel.frame.parent == f.env.UIParent)
-    assert(f.panel.market == demo and f.panel.demoInfo and not f.panel.scan.enabled)
-    assert(f.ahCalls == 0 and #f.sent == 0)
-    same(f.env.MarketPilotDB, before)
-end)
-
-test("demo details cannot leak a previous completed real scan and exit restores real scanning", function()
-    local f = watchFixture(); f.makeAnchor(); f:open()
-    f.panel.scan:Click(); f:complete()
-    assert(f.scanner.state == "DONE")
-    local real, liveMedian = f.mp.market, f.scanner.analysis.clean.weightedMedian
-    local before = clone(f.env.MarketPilotDB)
-    f.env.SlashCmdList.MARKETPILOT("demo on")
-    local demoMedian = f.panel.market:Get(2770).current.cleanMedian
-    assert(demoMedian ~= liveMedian and f.panel.view.cleanMedian == f.view.Money(demoMedian))
-    assert(f.panel.view.state == "READ ONLY")
-    f.panel.demoButton:Click()
-    assert(not f.panel.demoInfo and f.panel.market == real and f.panel.mode == "AH")
-    assert(f.panel.view.cleanMedian == f.view.Money(liveMedian))
-    assert(f.panel.scan.enabled and f.panel.batchButton.enabled and not f.panel:IsReadOnly())
-    same(f.env.MarketPilotDB, before)
-    local sent = #f.sent; f.panel.scan:Click()
-    assert(#f.sent == sent + 1 and f.scanner.state == "QUERYING")
-end)
-
-test("demo exit restores the previous standalone watch preference and live values", function()
-    for _, watching in ipairs({ false, true }) do
-        local f = watchFixture(); if watching then f:watch() end
-        local before = clone(f.env.MarketPilotDB)
-        f.env.SlashCmdList.MARKETPILOT("demo")
-        assert(f.panel.demoInfo and f.panel.frame:IsVisible())
-        f.env.SlashCmdList.MARKETPILOT("demo")
-        assert(not f.panel.demoInfo and f.panel.market == f.mp.market)
-        assert(f.panel.frame:IsVisible() == watching)
-        assert((f.panel.watchRequested == true) == watching)
-        if watching then assert(f.panel.view.cleanMedian == f.view.Money(100)) end
-        same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
+    assert(f.mp.Demo == nil and not read(ROOT .. "MarketPilot.toc"):find("Demo.lua", 1, true))
+    for _, command in ipairs({ "demo", "demo on", "demo off" }) do f.env.SlashCmdList.MARKETPILOT(command) end
+    assert(not f.panel.frame and f.panel.market == f.mp.market)
+    f:watch()
+    assert(f.panel.settingsButton.text == "Settings" and f.panel.demoButton == nil and f.panel.demoInfo == nil)
+    for _, object in ipairs(f.objects) do
+        if type(object.text) == "string" then assert(not object.text:lower():find("demo", 1, true), object.text) end
     end
+    same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0 and #f.sent == 0)
 end)
 
-test("demo is not persisted or re-enabled by a reload with the same real market key", function()
-    local f = watchFixture(); local before = clone(f.env.MarketPilotDB)
-    f.env.SlashCmdList.MARKETPILOT("demo on")
-    local reloaded = watchFixture(function(g) g.env.MarketPilotDB = clone(f.env.MarketPilotDB) end)
-    reloaded:watch()
-    assert(not reloaded.panel.demoInfo and reloaded.panel.market == reloaded.mp.market)
-    assert(reloaded.mp.market.db.key == f.bankKey and reloaded.panel.view.cleanMedian == reloaded.view.Money(100))
-    assert(#reloaded.mp.market.db:History(2770) == 4 and reloaded.ahCalls == 0)
-    same(f.env.MarketPilotDB, before); same(reloaded.env.MarketPilotDB, before)
-end)
-
-test("active waiting querying collecting batch and uncertain requests all refuse demo activation", function()
-    for _, mode in ipairs({ "WAITING", "QUERYING", "COLLECTING", "BATCH", "UNCERTAIN" }) do
-        local f = watchFixture(); f.makeAnchor(); f:open()
-        if mode == "UNCERTAIN" then f.scanner.uncertainQuery = true
-        elseif mode == "BATCH" then f.mp.batch:Start()
-        else
-            f.ready = mode ~= "WAITING"
-            f.scanner:Start(2770)
-            if mode == "COLLECTING" then f.scanner.state = "COLLECTING" end
-        end
-        local state, sent, before = f.scanner.state, #f.sent, clone(f.env.MarketPilotDB)
-        f.env.SlashCmdList.MARKETPILOT("demo on"); f.panel.demoButton:Click(true)
-        assert(not f.panel.demoInfo and f.panel.market == f.mp.market and f.scanner.state == state)
-        assert(#f.sent == sent and f:has("Demo was not opened"))
-        same(f.env.MarketPilotDB, before)
-    end
-end)
-
-test("invalid demo clock leaves the displayed real market and saved data intact", function()
+test("only standalone watch header drags and saves a center offset without touching market history", function()
     local f = watchFixture(); f:watch()
-    local before, real, oldView = clone(f.env.MarketPilotDB), f.mp.market, f.panel.view
-    f.env.time = function() return 0 / 0 end
-    f.env.SlashCmdList.MARKETPILOT("demo on")
-    assert(not f.panel.demoInfo and f.panel.market == real and f.panel.view == oldView)
-    assert(f.panel.frame:IsVisible() and f.scanner.state == "IDLE")
-    assert(f:has("Demo could not open") and f.ahCalls == 0 and #f.sent == 0)
-    same(f.env.MarketPilotDB, before)
+    local history = clone(f.env.MarketPilotDB.markets)
+    local panel = f.panel
+    assert(panel.frame.movable and panel.titleBar.parent == panel.frame)
+    assert(panel.titleBar.dragButtons[1] == "LeftButton" and panel.titleBar.width <= 440 + panel.toggle.point[4] - panel.toggle.width)
+    assert(not panel.frame.scripts.OnDragStart and not panel.body.scripts.OnDragStart and not panel.scan.scripts.OnDragStart)
+    panel.titleBar.scripts.OnDragStart(panel.titleBar)
+    assert(panel.dragging and panel.frame.moving)
+    panel.frame.center = { 1125, 495 }
+    panel.titleBar.scripts.OnDragStop(panel.titleBar)
+    assert(not panel.dragging and not panel.frame.moving)
+    same(f.mp.preferences:Get("watchPosition"), { x = 165, y = -45 })
+    panel.frame.center = nil
+    f:watch(); f:watch()
+    assert(panel.frame.point[1] == "CENTER" and panel.frame.point[2] == f.env.UIParent)
+    assert(panel.frame.point[4] == 165 and panel.frame.point[5] == -45)
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("AH docking stops a current watch drag and cannot itself be dragged", function()
+    local f = watchFixture(); f:watch()
+    local history = clone(f.env.MarketPilotDB.markets)
+    f.panel.titleBar.scripts.OnDragStart(f.panel.titleBar)
+    f.panel.frame.center = { 1080, 460 }
+    f.makeAnchor(); f:open()
+    assert(not f.panel.dragging and not f.panel.frame.moving and not f.panel.frame.movable)
+    same(f.mp.preferences:Get("watchPosition"), { x = 120, y = -80 })
+    local point = f.panel.frame.point
+    assert(point[1] == "TOPLEFT" and point[2] == f.env.AuctionHouseFrame and point[3] == "TOPRIGHT" and point[4] == 8 and point[5] == 0)
+    f.panel.titleBar.scripts.OnDragStart(f.panel.titleBar)
+    assert(not f.panel.dragging and not f.panel.frame.moving and f.panel.frame.point == point)
+    f.panel.frame.center = nil
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.mode == "STANDALONE" and f.panel.frame.movable and f.panel.frame:IsVisible())
+    assert(f.panel.frame.point[4] == 120 and f.panel.frame.point[5] == -80)
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("closing or externally hiding the watch stops its drag before saving the final position", function()
+    for _, close in ipairs({ "button", "hide" }) do
+        local f = watchFixture(); f:watch()
+        f.panel.titleBar.scripts.OnDragStart(f.panel.titleBar)
+        f.panel.frame.center = { 970, 550 }
+        if close == "button" then f.panel.closeButton:Click() else f.panel.frame:Hide() end
+        assert(not f.panel.dragging and not f.panel.frame.moving and not f.panel.frame:IsShown())
+        same(f.mp.preferences:Get("watchPosition"), { x = 10, y = 10 })
+    end
+end)
+
+test("watch position resets without detaching an AH panel or clearing history", function()
+    local f = watchFixture(); f:watch()
+    local history = clone(f.env.MarketPilotDB.markets)
+    f.mp.preferences:Set("watchPosition", { x = 90, y = 40 })
+    f.panel:Open(); assert(f.panel.frame.point[4] == 90)
+    f.panel:ResetPosition()
+    assert(f.mp.preferences:Get("watchPosition") == nil and f.panel.frame.point[4] == 0 and f.panel.frame.point[5] == 0)
+    f.mp.preferences:Set("watchPosition", { x = 70, y = 20 })
+    f.makeAnchor(); f:open()
+    local point = f.panel.frame.point
+    f.panel:ResetPosition()
+    assert(f.mp.preferences:Get("watchPosition") == nil and f.panel.frame.point == point)
+    assert(not f.panel.frame.movable and f.panel.mode == "AH")
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.frame.point[4] == 0 and f.panel.frame.point[5] == 0)
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0)
+end)
+
+test("standalone watch position survives reload alongside existing stored market values", function()
+    local f = watchFixture(); f:watch()
+    f.mp.preferences:Set("watchPosition", { x = -180, y = 60 })
+    local saved = clone(f.env.MarketPilotDB)
+    local reloaded = watchFixture(function(g) g.env.MarketPilotDB = clone(saved) end)
+    reloaded:watch()
+    assert(reloaded.panel.frame.point[4] == -180 and reloaded.panel.frame.point[5] == 60)
+    assert(reloaded.panel.view.cleanMedian == reloaded.view.Money(100))
+    assert(#reloaded.mp.market.db:History(2770) == 4 and reloaded.ahCalls == 0)
+    same(reloaded.env.MarketPilotDB.markets, saved.markets)
+end)
+
+test("settings command and panel button open an independent frame without scans or history edits", function()
+    local f = watchFixture(); local history = clone(f.env.MarketPilotDB.markets)
+    f.env.SlashCmdList.MARKETPILOT("settings")
+    assert(f.mp.settings.frame:IsVisible() and f.mp.settings.frame.parent == f.env.UIParent)
+    assert(not f.panel.frame)
+    f:watch()
+    assert(f.mp.settings.frame:IsVisible() and f.panel.frame:IsVisible())
+    f.env.SlashCmdList.MARKETPILOT("settings")
+    assert(not f.mp.settings.frame:IsShown() and f.panel.frame:IsVisible())
+    f.panel.settingsButton:Click()
+    assert(f.mp.settings.frame:IsVisible())
+    f.panel.closeButton:Click()
+    assert(f.mp.settings.frame:IsVisible() and not f.panel.frame:IsShown())
+    f.makeAnchor(); f:open(); f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.mp.settings.frame:IsVisible() and not f.panel.frame:IsShown())
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("minimap left watch and right settings work independently with a persistent visibility toggle", function()
+    local f = watchFixture(); local history = clone(f.env.MarketPilotDB.markets)
+    local launcher = f.mp.minimap.button
+    assert(launcher and launcher:IsVisible() and launcher.parent == f.env.Minimap)
+    launcher:Click(false, "LeftButton")
+    assert(f.panel.frame:IsVisible() and f.panel.mode == "STANDALONE" and not f.mp.settings.frame)
+    launcher:Click(false, "RightButton")
+    assert(f.mp.settings.frame:IsVisible() and f.panel.frame:IsVisible())
+    launcher:Click(false, "LeftButton")
+    assert(not f.panel.frame:IsShown() and f.mp.settings.frame:IsVisible())
+    f.mp.settings.checkbox:SetChecked(false); f.mp.settings.checkbox:Click()
+    assert(not launcher:IsShown() and f.mp.settings.frame:IsVisible())
+    assert(f.mp.preferences:Get("minimapShown") == false)
+    f.env.SlashCmdList.MARKETPILOT("settings"); f.env.SlashCmdList.MARKETPILOT("settings")
+    assert(f.mp.settings.frame:IsVisible() and not launcher:IsShown())
+    local reloaded = watchFixture(function(g) g.env.MarketPilotDB = clone(f.env.MarketPilotDB) end)
+    assert(not reloaded.mp.minimap.button or not reloaded.mp.minimap.button:IsShown())
+    reloaded.env.SlashCmdList.MARKETPILOT("settings")
+    reloaded.mp.settings.checkbox:SetChecked(true); reloaded.mp.settings.checkbox:Click()
+    assert(reloaded.mp.minimap.button:IsVisible() and reloaded.mp.settings.frame:IsVisible())
+    same(f.env.MarketPilotDB.markets, history); same(reloaded.env.MarketPilotDB.markets, history)
+    assert(f.ahCalls == 0 and reloaded.ahCalls == 0 and #f.sent == 0 and #reloaded.sent == 0)
+end)
+
+test("settings reset restores both independent positions without moving an AH-docked watch", function()
+    local f = watchFixture(); f:watch(); f.env.SlashCmdList.MARKETPILOT("settings")
+    local history = clone(f.env.MarketPilotDB.markets)
+    f.mp.preferences:Set("watchPosition", { x = 120, y = 80 })
+    f.mp.preferences:Set("settingsPosition", { x = -140, y = -70 })
+    f.panel:Open(); f.mp.settings:Refresh()
+    assert(f.panel.frame.point[4] == 120 and f.mp.settings.frame.point[4] == -140)
+    f.makeAnchor(); f:open()
+    local point = f.panel.frame.point
+    f.mp.settings.resetButton:Click()
+    assert(f.mp.preferences:Get("watchPosition") == nil and f.mp.preferences:Get("settingsPosition") == nil)
+    assert(f.panel.frame.point == point and f.panel.mode == "AH" and not f.panel.frame.movable)
+    assert(f.mp.settings.frame.point[4] == 0 and f.mp.settings.frame.point[5] == 0)
+    assert(f.mp.settings.frame:IsVisible())
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.frame:IsVisible() and f.panel.frame.point[4] == 0 and f.panel.frame.point[5] == 0)
+    same(f.env.MarketPilotDB.markets, history); assert(f.ahCalls == 0)
+end)
+
+test("optional settings refresh failure cannot prevent AH open or a manual scan", function()
+    local f = fixture()
+    f.mp.settings.Refresh = function() error("fixture optional settings failure") end
+    f:open()
+    assert(f.scanner.ahOpen and f.scanner.state == "IDLE" and f.panel.mode == "AH")
+    assert(f:has("Window settings unavailable"))
+    f:select(2770); f:complete(2770)
+    assert(#f.sent == 1 and f.scanner.state == "DONE")
 end)
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

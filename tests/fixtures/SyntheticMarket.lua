@@ -1,8 +1,8 @@
 local _, MP = ...
-local Demo, DAY = {}, 86400
-MP.Demo = Demo
+local SyntheticMarket, DAY = {}, 86400
+MP.SyntheticMarket = SyntheticMarket
 
--- A separate, disposable market: never accept a saved root or copy live history.
+-- Offline statistical regression data only. Never load this fixture in the addon.
 local profiles = {
     { kind = "RISING", label = "Rising market", description = "About +4% per day over 30 days." },
     { kind = "FALLING", label = "Falling market", description = "About -3.85% per day over 30 days." },
@@ -34,22 +34,22 @@ local function sample(kind, index, timestamp)
     return { capturedAt = timestamp, priceLevels = levels }
 end
 
-function Demo.Create(now, items)
-    if not MP.HistoryMath.Integer(now, 30 * DAY) then return nil, "Demo needs a valid current timestamp." end
-    if type(items) ~= "table" or type(items.List) ~= "function" then return nil, "Demo needs configured items." end
+function SyntheticMarket.Create(now, items)
+    if not MP.HistoryMath.Integer(now, 30 * DAY) then return nil, "Fixture needs a valid current timestamp." end
+    if type(items) ~= "table" or type(items.List) ~= "function" then return nil, "Fixture needs configured items." end
     local ids, seen, count = items.List(), {}, 0
-    if type(ids) ~= "table" then return nil, "Demo needs a list of configured items." end
+    if type(ids) ~= "table" then return nil, "Fixture needs a list of configured items." end
     for key, id in pairs(ids) do
         if not MP.HistoryMath.Integer(key, 1) or key > #ids or not MP.HistoryMath.Integer(id, 1) or seen[id] then
-            return nil, "Demo item list must contain unique valid IDs."
+            return nil, "Fixture item list must contain unique valid IDs."
         end
         seen[id], count = true, count + 1
     end
-    if count == 0 or count ~= #ids then return nil, "Demo needs a nonempty dense item list." end
+    if count == 0 or count ~= #ids then return nil, "Fixture needs a nonempty dense item list." end
 
-    local database = MP.Database.Open(nil, "demo:30-days", now)
+    local database = MP.Database.Open(nil, "fixture:30-days", now)
     if database.status ~= "OK" then return nil, database.error end
-    local metadata = { synthetic = true, label = "Demo: 30 days of simulated markets", days = 30, count = 91, items = {} }
+    local metadata = { synthetic = true, label = "Fixture: 30 days of simulated markets", days = 30, count = 91, items = {} }
     for position, id in ipairs(ids) do
         local profile = profiles[examples[id] or ((position - 1) % #profiles + 1)]
         metadata.items[id] = { kind = profile.kind, label = profile.label, description = profile.description }

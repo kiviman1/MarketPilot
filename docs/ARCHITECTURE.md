@@ -23,9 +23,11 @@ There is no Inventory, Pricing, Sale Assistant or posting module. Probe is uncha
 | Significance | Pure two-sided, tie-corrected Mann-Whitney normal approximation |
 | MarketSignal | Pure descriptive price/trend/supply/volatility labels |
 | Market | Completed-scan persistence, latest observations, cached analytics and report aggregation |
-| Demo | Deterministic synthetic scans -> isolated in-memory Market using the same calculation pipeline |
+| Preferences | Versioned optional UI settings; safe defaults, validation and position conversion |
 | UIViewModel | Presentation: formatting, missing-data labels, watch/detail/report text |
 | UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
+| Settings | Independent UIParent window for launcher visibility and window-position reset |
+| Minimap | Native click/drag launcher; injected watch/settings callbacks |
 
 ```text
 Core -> Scanner -> AuctionAPI
@@ -37,7 +39,8 @@ Core -> Scanner -> AuctionAPI
                -> MarketSignal
      -> UI -> Scanner / BatchScanner / Market / Items
            -> UIViewModel -> HistoryMath (numeric guard only)
-     -> Demo -> Statistics / Database / Market
+     -> Preferences (optional root.preferences)
+     -> Settings / Minimap -> Preferences
 ```
 
 Core records a completed sample before updating the panel. Queue advancement
@@ -139,19 +142,28 @@ partition. Reads return detached whitelist copies.
 
 ## Dashboard and report
 
-`/mp demo on/off` or the panel's 30d Demo/Exit demo button switches only the UI's
-Market source. Core retains its real Market instance for Record, identity binding
-and persistence diagnostics. Demo creates a fresh private root (never a saved
-root) and 91 synthetic observations per configured item spanning 30 days. It uses
-the existing statistics, database snapshot and historical model implementations.
-Scenario descriptions accompany current detail. No model formulas/thresholds change.
+Runtime demo mode was removed in 0.5.3. The deterministic month-long market
+generator now lives only in `tests/fixtures/SyntheticMarket.lua`; it is not in the
+TOC/source manifest. The same mathematical regression checks remain offline.
 
-The demo flag forces read-only actions even when docked beside an open AH. Core
-also blocks scan/batch/cancel/svmark commands. Activation refuses an active batch,
-pending scan or uncertain dispatch. Exit restores the real Market and previous
-watch preference; reload never restores a demo. Closing the panel does not disable
-the mode. Demo/history caches stay separate, and no synthetic root is assigned to
-the saved global. See [DEMO.md](DEMO.md) for fixtures and expected results.
+The minimap icon dispatches injected callbacks: left click toggles Watch; right
+click toggles Settings. Drag/release computes a rim angle once, without polling.
+`/mp settings` and the panel Settings button provide access when the icon is hidden.
+Settings is an independent UIParent frame; AH lifecycle never hides or reparents it.
+Both standalone windows move using a title-only drag region. A mode change or
+hide stops dragging; the AH-side panel remains fixed to the existing anchor.
+
+Preferences are an optional, separately versioned extension of the schema-1 root:
+`preferences = { version=1, minimapShown=<boolean>, minimapAngle=<degrees>,
+watchPosition={x,y}, settingsPosition={x,y} }`. Absent fields use defaults without
+writing anything. Positions are offsets from UIParent center in its scale. Only
+an explicit setting/drag/reset writes validated primitive preferences; opening
+windows does not seed settings. Reads return position copies. Unknown preference
+versions or unsupported roots are preserved, with session-only fallback settings.
+This additive extension does not migrate/reset market schema, keys, snapshots or
+the diagnostic canary, and adds no second SavedVariables name. Reset clears only
+the two positions. Core rebinds the preferences owner alongside lifecycle history
+binding so a replaced global is not written through a stale root.
 
 UIViewModel translates missing/failed facts into plain display labels and short
 actionable explanations; internal UNKNOWN/INSUFFICIENT and other enums remain
@@ -173,13 +185,14 @@ quiet; `/mp debug on/off` controls session-only verbose output, while errors and
 batch completion remain visible.
 
 `/mp watch` toggles that same frame anywhere. Away from AH its mode is STANDALONE,
-parent/anchor `UIParent`, `CENTER -> CENTER`, with a READ ONLY label. Item clicks
+parent/anchor `UIParent`, `CENTER -> CENTER` plus the saved title-drag offset, with
+a READ ONLY label. Item clicks
 select stored detail; batch/refresh/cancel controls and their handlers are disabled.
 Core also rejects scanning debug commands in this mode. Market/UIViewModel are
 shared with AH mode; no duplicate analytics or database mutation on window actions.
 
 AH open re-parents/re-anchors the frame in AH mode and restores normal scan actions.
-AH close returns it to standalone only when `/mp watch` explicitly requested it;
+AH close returns it to standalone only when `/mp watch` or the minimap explicitly requested it;
 otherwise it hides as before. Toggling a visible window off clears this session-only
 preference. Toggling a hidden window on uses AH mode if AH is already open.
 Selection/report/collapse state survives mode changes. No automatic show after

@@ -2,7 +2,8 @@
 ## Title: MarketPilot
 ## Notes: MP-05 gathering market intelligence for Forever beta
 ## Author: Kivanc / MarketPilot
-## Version: 0.5.2
+## Version: 0.5.3
+## IconTexture: Interface\AddOns\MarketPilot\Media\Icon.tga
 ## SavedVariables: MarketPilotDB
 
 Items.lua
@@ -16,7 +17,9 @@ MarketSignal.lua
 Scanner.lua
 BatchScanner.lua
 Market.lua
-Demo.lua
+Preferences.lua
 UIViewModel.lua
 UI.lua
+Settings.lua
+Minimap.lua
 Core.lua

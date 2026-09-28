@@ -290,3 +290,22 @@ the revised 0.5.1 panel rendering; the newly configured Classic materials' Forev
 availability/commodity paths; the optional 30-second deadline under client lag;
 result completeness/paging and cross-market sharing. Existing mathematical tests
 do not substitute for accumulated real 7d/30d history.
+
+## 0.5.3 launcher/settings preparation — offline only
+
+Runtime demo mode was removed by user request. The synthetic 30-day model fixtures
+remain test-only; no mathematical formulas or real history were changed.
+
+New native UI surfaces are implemented and covered by frame mocks: minimap
+left/right click and drag/release; standalone Watch title dragging and saved
+position; independent Settings; AH docking and return to the saved position.
+These mocks are not Forever client observations. Rendering, click/drag behavior,
+minimap shape/scale interactions and preference serialization still require
+the user's in-client test.
+
+The addon-list logo uses `## IconTexture`. Blizzard's
+[AddonList source](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_AddOnList/AddonList.lua)
+reads this metadata for its icon. That is a reference for implementation, **not**
+confirmation that Forever's character-screen addon list supports it; actual logo
+display remains UNKNOWN. No addon-list hooks, AH signatures or fallback probes
+were added. Source checks do not create a build/package or release tag.

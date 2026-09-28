@@ -52,15 +52,22 @@ Normal scan trace is quiet; errors and batch completion remain visible.
 Debug helpers: `/mp status`, `/mp dbstatus`, `/mp svdebug`, `/mp svmark`, `/mp scan`, `/mp batch`, `/mp cancel`, `/mp report`.
 The UI has no sale, bag, purchase or posting workflow.
 
-## Thirty-day demo
+## Launcher and independent settings
 
-Use **30d Demo** in the panel or `/mp demo on` to preview a month of simulated
-markets. All 56 items get 91 observations through the normal calculation pipeline;
-the panel prominently labels the data as DEMO. No live query or real history write
-occurs. Activation waits for an active scan to finish or be cancelled/drained.
-**Exit demo**, `/mp demo off`, or reload discards the in-memory preview. Closing
-the window alone does not exit demo. [Scenario expectations and checks](../docs/DEMO.md)
-include rising/falling/flat prices, supply shifts and a 100000g outlier.
+Left-click the minimap icon to toggle Market Watch. Right-click it, click the
+panel's **Settings** button, or use `/mp settings` for independent settings.
+Drag the minimap icon and release to place it around the rim. No update loop runs.
+Settings offers **Show minimap icon** and **Reset window positions**; it stays
+available even if the icon is hidden, the watch is closed or AH opens/closes.
+Drag either standalone window by its title. AH-side Market Watch stays attached.
+
+The addon-list logo uses `## IconTexture` and the same bundled `Media/Icon.tga`.
+Its actual display in Forever's addon selection screen remains a client check;
+there are no Blizzard addon-list hooks or title markup fallbacks.
+
+Runtime demo mode, button and commands are removed in 0.5.3. Month-long synthetic
+data lives only in offline regression fixtures, including the 100000g outlier.
+The addon always displays real current/stored observations.
 
 Normal display labels now distinguish **No scan** (no observation), **No price**
 (a scan returned no usable price), **Failed** (scan/storage error), and
@@ -70,8 +77,10 @@ are never invented to fill a gap.
 
 ## Stored Market Watch anywhere
 
-Use `/mp watch` away from AH to toggle a standalone, read-only window centered on
-`UIParent`. It does not require `AuctionHouseFrame`. Watchlist, selected-item
+Use `/mp watch` or the minimap icon away from AH to toggle a standalone, read-only
+window parented to `UIParent`, initially centered. It does not require
+`AuctionHouseFrame`. Drag its title to move it; the next open/reload restores that
+position, clamped to the screen. Watchlist, selected-item
 detail, history, Market Report, scrolling and collapse use the same Market and
 UIViewModel data as the AH panel. Item clicks only select stored detail. Scan
 Gathering Markets, Scan/Refresh and Cancel are disabled; forced handlers and scan
@@ -82,8 +91,9 @@ available. If explicitly opened with `/mp watch`, it returns to standalone on AH
 close. Otherwise the existing AH-only lifecycle still hides it. `/mp watch` on a
 visible window hides it and clears that standalone preference; on a hidden window
 it opens in the current context (AH mode when AH is open). Hiding an AH panel does
-not cancel a running batch; use Cancel for that. Preference/selection/collapse are
-session-only, so use `/mp watch` again after reload or character switch.
+not cancel a running batch; use Cancel for that. Visibility/selection/collapse are
+session-only, so use the minimap icon or `/mp watch` again after reload or character
+switch. Window positions and minimap preferences are saved account-wide.
 
 Opening/closing, selecting and reporting in standalone neither initializes nor
 writes/prunes history. Normal database initialization/retention runs at addon
@@ -146,13 +156,20 @@ pre-bind observations before deciding whether data was loaded or replaced.
 
 ## Implementation and persistence
 
+UI preferences are an optional extension within the same `MarketPilotDB` root:
+`preferences.version=1`, minimap visibility/angle and the two window positions.
+Defaults are read without writes; only an explicit change, drag or position reset
+saves them. Unsupported preference versions remain untouched and use session-only
+defaults/overrides. The history schema remains 1 with no migration or reset; reset
+positions never clears history. [Preference contract](../docs/ARCHITECTURE.md#dashboard-and-report).
+
 TOC order:
 
 ```text
 Items.lua / AuctionAPI.lua / Statistics.lua
 HistoryMath.lua / Database.lua / Significance.lua / HistoricalAnalytics.lua
-MarketSignal.lua / Scanner.lua / BatchScanner.lua / Market.lua / Demo.lua
-UIViewModel.lua / UI.lua / Core.lua
+MarketSignal.lua / Scanner.lua / BatchScanner.lua / Market.lua / Preferences.lua
+UIViewModel.lua / UI.lua / Settings.lua / Minimap.lua / Core.lua
 ```
 
 AuctionAPI remains the only production AH API boundary; Statistics is unchanged.
@@ -211,7 +228,7 @@ Run all suites from the repository root with Lua 5.1:
 
 ```text
 python tools/test.py
-python tools/package.py
+python tools/package.py --check
 ```
 
 On the development host these also run under Python's installed `lupa.lua51`
@@ -219,15 +236,29 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.2
+## In-game acceptance for 0.5.3 (no release build yet)
 
-Demo check: open `/mp demo on` away from AH; inspect Copper, Silver, Iron, Mithril
-and Peacebloom against [DEMO.md](../docs/DEMO.md). Confirm the banner, disabled
-scans, Current/History/Report and no technical missing-value labels. Open/close AH
-while in demo: still read-only. Exit or reload: real item counts/history remain.
+No release package/tag is created in this follow-up. CI validates the source
+manifest without producing a ZIP. A further user experiment is pending.
+
+1. Check the new icon in the character-screen addon list and beside the minimap.
+   Left-click opens/closes stored Watch, right-click opens independent Settings.
+2. Drag Watch by its title away from AH. Close/reopen and `/reload`: restore its
+   position and real prices. Item buttons/report must not scan outside AH.
+3. Move Settings separately; close Watch and open/close AH: Settings stays in
+   place. Hide the minimap icon, reload, then use `/mp settings` to restore it.
+   Drag the minimap icon; release/reload retains its angle. Check scaled UI too.
+4. Open AH with Watch already visible: it docks on the right and cannot be dragged
+   off AH. Scan controls work. Close AH: return to the saved standalone position.
+   Test AH open or Watch close while a title drag is in progress.
+5. Reset window positions in Settings: both standalone windows center; an active
+   AH panel stays docked. History, filters and minimap visibility stay intact.
+6. No Demo button/banner remains. `/mp demo on` only prints command help; no
+   synthetic data appears and existing snapshot counts stay unchanged.
 
 The original five-item batch and post-reload database retention were confirmed.
-The expanded 56-item batch, redesigned native panel and demo need a fresh client check.
+The expanded 56-item batch and the new launcher/settings/drag behavior need a
+fresh client check; offline frame mocks do not establish client compatibility.
 
 Reload binding acceptance: scan on bank alt and record `Now` plus `/mp dbstatus`.
 Run `/reload` -> `/mp watch` without scanning: the same Now values, active key,
