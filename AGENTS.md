@@ -21,6 +21,26 @@ MarketPilot is a private, lightweight WoW Forever Auction House analysis addon. 
 11. **No broad cleanup.** Do not rename/reformat unrelated code while implementing a scoped task.
 12. **Tests where practical.** Pure statistical/price logic should be testable outside WoW with deterministic Lua fixtures.
 
+## Development deployments and CurseForge releases
+
+The user installs the public addon through CurseForge. Preserve that installation.
+
+- Future in-game development copies must use a separate `MarketPilotDev/` folder
+  and an unmistakable `MarketPilot Dev` addon title; never overwrite the
+  CurseForge-managed `MarketPilot/` folder during development.
+- Before the next development deployment, implement and verify the dev identity:
+  matching TOC name, addon/asset paths, isolated SavedVariables (such as
+  `MarketPilotDevDB`), slash commands (such as `/mpdev`), and named global frames.
+  Renaming the directory alone is not sufficient. This workflow rule does not
+  mean that a dev packaging mode already exists.
+- Keep dev data separate from release history/settings. Do not copy, migrate,
+  reset or delete the user's release data without an explicit request.
+- Avoid simultaneous AH scans from the dev and release addons during testing.
+- CurseForge release ZIPs retain the normal `MarketPilot/` folder, title,
+  commands, asset paths and `MarketPilotDB` identity. Exclude dev-only artifacts.
+- Generate development/release variants from the same source; do not maintain
+  a second manually edited addon tree. Build a release only when requested.
+
 ## Current task gate
 
 The production addon must not be implemented past the documented scaffold until MP-00 confirms the actual Forever beta Auction House behavior.
