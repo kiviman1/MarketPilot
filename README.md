@@ -3,7 +3,7 @@
 Lightweight WoW Forever market-intelligence addon for Mining,
 Herbalism and Skinning commodities.
 
-## Market Watch (0.5.7)
+## Market Watch (0.5.9)
 
 Starting from the validated MP-03 side panel:
 
@@ -24,6 +24,10 @@ With AH open, clicking a material refreshes its analysis and then opens its
 normal name search in Blizzard's Browse Auctions list, using the same search
 method and current filter/level settings as Blizzard's Search button. The two requests run in
 sequence. Batch scans and the Refresh button do not navigate Blizzard's list.
+**Market Summary** explains the recorded scan in Current; **Historical Context**
+explains supported comparisons in History. Both disclose missing data and scan
+age above the existing technical tables. Prices use native gold/silver/copper
+icons while preserving exact copper and fractional historical medians.
 Away from AH, click the **minimap icon** or use `/mp watch` for stored history;
 drag its title to move the read-only window. `/mp report` opens the stored report.
 Right-click the minimap icon, click **Settings**, or use `/mp settings` for an
@@ -43,12 +47,12 @@ Missing values use plain labels: **No scan**, **No price**, **Needs history** an
 **Failed**. A dash in a historical column means more observations are needed.
 Missing prices never become zero. Technical state names remain in debug output.
 
-Install the `MarketPilot/` folder from `MarketPilot-0.5.7.zip` into the client's
+Install the `MarketPilot/` folder from `MarketPilot-0.5.9.zip` into the client's
 `Interface/AddOns/`. The archive contains only the addon runtime and its icon;
 existing account history and settings are not bundled or replaced.
 Build the upload archive from this checkout with `python tools/package.py`.
-The resulting file is `dist/MarketPilot-0.5.7.zip`; see the
-[release notes](docs/RELEASE_NOTES_0.5.7.md) for the upload changelog.
+The resulting file is `dist/MarketPilot-0.5.9.zip`; see the
+[release notes](docs/RELEASE_NOTES_0.5.9.md) for changes since 0.5.5 and the upload changelog.
 The upload logo is [assets/MarketPilot-CurseForge.png](assets/MarketPilot-CurseForge.png),
 a 512 x 512 PNG exported from the addon's own vector mark. Recreate it without an
 addon build using `python tools/render_icon.py --png-only --size 512 <output.png>`.
