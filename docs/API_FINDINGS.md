@@ -410,5 +410,7 @@ bounds and filters; MarketPilot no longer constructs a separate filter/level
 request or requires the ExactMatch enum. There are no button-click proxies,
 alternate query signatures, retries, or saved-filter mutations by MarketPilot.
 
-The new programmatic path still needs the Gold Ore in-client recheck. The manual
-button observation is not a confirmation that 0.5.7 has already passed that test.
+CONFIRMED by the user's follow-up on 2026-09-29: "tamam duzeldi bu sorun"
+(this issue is fixed). The user reports the corrected native search flow now
+works. This confirms the reported navigation symptom is resolved; it does not
+establish the semantics of the old ExactMatch filter or isolate its cause.

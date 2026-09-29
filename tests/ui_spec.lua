@@ -82,6 +82,15 @@ local function fixture(configure)
         function w:Disable() self.enabled = false end
         function w:EnableMouse(value) self.mouse = value end
         function w:SetText(value) self.text = value end
+        function w:GetStringHeight()
+            -- Conservative deterministic font stub; actual font metrics are a
+            -- client check. Respect explicit newlines and the assigned width.
+            local lines, columns = 0, math.max(1, math.floor((self.width or 1) / 7))
+            for line in ((self.text or "") .. "\n"):gmatch("([^\n]*)\n") do
+                lines = lines + math.max(1, math.ceil(#line / columns))
+            end
+            return lines * 14
+        end
         function w:SetWordWrap(value) self.wordWrap = value end
         function w:SetJustifyH(value) self.justify = value end
         function w:SetJustifyV(value) self.justifyV = value end
@@ -1053,7 +1062,8 @@ end)
 test("current/history tabs and report are reachable without a catalogue-length scroll", function()
     local f = watchFixture(); f:watch()
     assert(f.panel.frame.clamped and f.panel.currentDetails:IsVisible() and not f.panel.historicalDetails:IsVisible())
-    assert(f.panel.detail.point[5] == -302 and f.panel.scrollLimit < 120)
+    assert(f.panel.detail.point[5] == -302 and f.panel.summaryTitle:IsVisible())
+    assert(f.panel.scrollLimit < 500) -- bounded summary + raw tables, independent of catalogue size
     f.panel.historyButton:Click()
     assert(f.panel.historicalDetails:IsVisible() and not f.panel.currentDetails:IsVisible())
     assert(f.panel.historyValues.median30.text == "0g 2s 0c")
@@ -1923,6 +1933,120 @@ test("row click wires real AuctionAPI bridge to localized Blizzard search and fu
     assert(not f.scanner:IsActive() and f.scanner.state == "DONE" and not f.scanner.browseError)
     assert(fullReads == 2 and #nativeCalls == 1 and #timers == 1 and #f.sent == 1)
     same(f.env.MarketPilotDB, saved)
+end)
+
+test("summary is visible by default and preserves raw statistics", function()
+    local f = fixture(); f:open()
+    assert(f.panel.summaryTitle.text == "Market Summary" and f.panel.summary:IsVisible())
+    assert(f.panel.summary.text:find("No scan recorded for this item.", 1, true))
+    f.panel.scan:Click(); f:complete()
+    assert(f.panel.summary.text:find("reference price", 1, true))
+    assert(f.panel.summary.text:find("472 listed units", 1, true))
+    assert(f.panel.currentDetails:IsVisible() and f.panel.view.cleanMedian == "0g 2s 0c")
+    assert(f.panel.view.quantity == "472" and f.panel.view.levels == "2")
+    f.panel.historyButton:Click()
+    assert(f.panel.summaryTitle.text == "Historical Context" and f.panel.historicalDetails:IsVisible())
+    assert(f.panel.summary.text == f.panel.insight.history)
+    assert(f.panel.historyValues.median7.text == "Needs history")
+    f.panel.reportButton:Click()
+    assert(not f.panel.summary:IsVisible() and f.panel.reportText:IsVisible())
+    f.panel.reportButton:Click(); f.panel.currentButton:Click()
+    assert(f.panel.summary:IsVisible() and f.panel.summaryTitle.text == "Market Summary")
+end)
+
+test("summary selection uses only the selected item and never starts a standalone query", function()
+    local f = watchFixture(); f:watch()
+    assert(f.panel.summary.text:find("1s0c", 1, true))
+    f:select(2447)
+    assert(f.panel.summary.text:find("27c", 1, true))
+    assert(not f.panel.summary.text:find("1s0c", 1, true))
+    f:select(2318)
+    assert(f.panel.summary.text:find("No scan recorded for this item.", 1, true))
+    assert(not f.panel.summary.text:find("27c", 1, true))
+    assert(f.ahCalls == 0 and #f.sent == 0 and f.scanner.state == "IDLE")
+end)
+
+test("stored summary is identical in standalone and AH modes", function()
+    local f = watchFixture(); f:watch()
+    local before = clone(f.panel.insight)
+    f.makeAnchor(); f:open()
+    same(f.panel.insight, before)
+    assert(f.panel.mode == "AH" and #f.sent == 0)
+    f:event("AUCTION_HOUSE_CLOSED")
+    same(f.panel.insight, before)
+    assert(f.panel.mode == "STANDALONE" and f.ahCalls == 0)
+end)
+
+test("summary survives reload and repeated rendering without writes or analytics reruns", function()
+    local f = watchFixture(); f:watch()
+    local saved, data = clone(f.env.MarketPilotDB), clone(f.mp.market:Get(2770))
+    local expected = clone(f.panel.insight)
+    f.mp.Statistics.Analyze = function() error("summary recalculated statistics") end
+    f.mp.HistoricalAnalytics.Analyze = function() error("summary recalculated history") end
+    f.mp.market.db.Append = function() error("summary wrote a snapshot") end
+    for _ = 1, 3 do
+        f.panel:Update(); f.panel.historyButton:Click(); f.panel.currentButton:Click()
+        same(f.panel.insight, expected)
+    end
+    same(f.env.MarketPilotDB, saved); same(f.mp.market:Get(2770), data)
+    local reloaded = watchFixture(function(g) g.env.MarketPilotDB = clone(saved) end)
+    reloaded:watch()
+    same(reloaded.panel.insight, expected); same(reloaded.env.MarketPilotDB, saved)
+    assert(f.ahCalls == 0 and reloaded.ahCalls == 0)
+end)
+
+test("failed refresh keeps previous summary explicitly dated", function()
+    local f = watchFixture(); f:watch(); f.makeAnchor(); f:open()
+    local before = clone(f.env.MarketPilotDB)
+    f.now = f.now + 120
+    f.rows = { { quantity = 5 } }
+    f.panel.scan:Click(); f:complete()
+    assert(f.scanner.state == "ERROR")
+    assert(f.panel.summary.text:find("previous", 1, true))
+    assert(f.panel.summary.text:find("1s0c", 1, true))
+    assert(f.panel.summary.text:find("2 minutes ago", 1, true))
+    same(f.env.MarketPilotDB, before)
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.summary.text:find("latest update reported an error", 1, true))
+    assert(f.panel.summary.text:find("2 minutes ago", 1, true))
+    f:select(2447)
+    assert(f.panel.summary.text:find("27c", 1, true))
+    assert(not f.panel.summary.text:find("previous", 1, true))
+end)
+
+test("wrapped summaries stay above raw tables at all supported scales", function()
+    local f = watchFixture(); f:watch()
+    f.panel.summary.GetStringHeight = function(widget)
+        assert(widget.wordWrap and widget.width == 412)
+        return widget.text == f.panel.insight.current and 280 or 340
+    end
+    for _, scale in ipairs({ 0.8, 0.9, 1, 1.1, 1.2 }) do
+        f.mp.preferences:Set("watchScale", scale); f.panel:ApplyPreferences()
+        for _, mode in ipairs({ "CURRENT", "HISTORY" }) do
+            f.panel:Detail(mode)
+            local details = mode == "CURRENT" and f.panel.currentDetails or f.panel.historicalDetails
+            local summaryBottom = -f.panel.summary.point[5] + f.panel.summary:GetStringHeight()
+            assert(-details.point[5] >= summaryBottom + 14)
+            local tableBottom = -f.panel.detail.point[5] - details.point[5] + 300
+            assert(f.panel.body.height >= tableBottom)
+            f.panel.scroll.scripts.OnMouseWheel(nil, -100)
+            assert(f.panel.scroll:GetVerticalScroll() == f.panel.scrollLimit)
+            assert(f.panel.scroll:GetVerticalScroll() + f.panel.scroll.height >= tableBottom)
+            assert(f.panel.frame:GetScale() == scale and not f.panel.scrollUp and not f.panel.scrollDown)
+        end
+    end
+    assert(f.ahCalls == 0)
+end)
+
+test("summary switches to empty observation after successful empty refresh", function()
+    local f = watchFixture(); f:watch(); f.makeAnchor(); f:open()
+    f.rows = {}; f.now = f.now + 60
+    f.panel.scan:Click(); f:complete()
+    assert(f.scanner.state == "DONE")
+    assert(f.panel.summary.text:find("No price levels returned in the latest scan.", 1, true))
+    assert(not f.panel.summary.text:find("reference price", 1, true))
+    assert(not f.panel.summary.text:find("previous", 1, true))
+    assert(f.panel.view.cleanMedian == "No price data" and f.panel.view.quantity == "0")
 end)
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

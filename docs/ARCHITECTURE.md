@@ -24,6 +24,7 @@ There is no Inventory, Pricing, Sale Assistant or posting module. Probe is uncha
 | MarketSignal | Pure descriptive price/trend/supply/volatility labels |
 | Market | Completed-scan persistence, latest observations, cached analytics and report aggregation |
 | Preferences | Versioned optional UI settings; safe defaults, validation and position conversion |
+| MarketInsight | Pure explanation codes and validated parameters from existing Market facts; no analytics rerun |
 | UIViewModel | Presentation: formatting, missing-data labels, watch/detail/report text |
 | UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
 | Settings | Independent UIParent window for display, category, lock, trace and launcher preferences |
@@ -38,6 +39,7 @@ Core -> Scanner -> AuctionAPI
                                       -> HistoryMath
                -> MarketSignal
      -> UI -> Scanner / BatchScanner / Market / Items
+           -> MarketInsight (snapshot/analytics/signals + selected-item context)
            -> UIViewModel -> HistoryMath (numeric guard only)
      -> Preferences (optional root.preferences)
      -> Settings / Minimap -> Preferences
@@ -201,6 +203,13 @@ Collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
 anchor/render failures hide the panel and print diagnostics.
 
 Category filters and six-row paging keep the expanded catalogue bounded onscreen.
+Market Summary (Current) and Historical Context (History) precede the unchanged
+raw tables. MarketInsight consumes the selected item's Market result and explicit
+scanner/time context; UIViewModel formats its codes. Wrapped summary font height
+determines the table anchor and scroll extent during existing UI refreshes, with
+no polling. Stored observation age and unavailable metrics remain visible. See
+[Market Summary rules and scenario matrix](MARKET_SUMMARY.md) for the contract,
+independent availability checks, mixed situations and regression fixtures.
 Current and History are separate detail tabs. Market Report replaces the list
 and detail temporarily, with four items per section plus a remaining count.
 Close clears the explicit-watch preference. Screen clamping is guarded by method

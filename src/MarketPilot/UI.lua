@@ -287,6 +287,10 @@ function UI:Create(anchor)
     self.currentButton = button("Current", self.detail, 14, -37, 96, function(s) s:Detail("CURRENT") end)
     self.historyButton = button("History", self.detail, 114, -37, 96, function(s) s:Detail("HISTORY") end)
     self.scan = button("Scan", self.detail, 216, -37, 210, self.Scan)
+    self.summaryTitle = label(self.detail, "Market Summary", 14, -72, WIDTH - 28, "GameFontNormal")
+    self.summary = label(self.detail, "", 14, -93, WIDTH - 28)
+    self.summary:SetWordWrap(true)
+    self.summary:SetJustifyV("TOP")
     self.currentDetails = CreateFrame("Frame", nil, self.detail)
     self.currentDetails:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 0, -72)
     self.currentDetails:SetSize(WIDTH, 300)
@@ -361,6 +365,25 @@ function UI:Open()
     return true
 end
 
+function UI:UpdateInsight(data, now)
+    self.insight = MP.UIViewModel.Insight(MP.MarketInsight.Build(data, {
+        itemID = self.selectedItemID, scannerItemID = self.scanner.itemID,
+        scannerState = self.scanner.state, now = now,
+    }))
+    local historical = self.detailMode == "HISTORY"
+    self.summaryTitle:SetText(historical and "Historical Context" or "Market Summary")
+    self.summary:SetText(historical and self.insight.history or self.insight.current)
+    -- Measure the wrapped font at the existing local width. Scaling the window
+    -- scales text and frames together; no timer or per-frame layout is needed.
+    local tableTop = 93 + math.ceil(self.summary:GetStringHeight()) + 14
+    for _, details in ipairs({ self.currentDetails, self.historicalDetails }) do
+        details:ClearAllPoints()
+        details:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 0, -tableTop)
+    end
+    self.detail:SetHeight(tableTop + 306)
+    self.watchContentHeight = 302 + tableTop + 306
+end
+
 function UI:Close()
     self:StopDrag()
     if self.frame then self.frame:Hide() end
@@ -377,6 +400,8 @@ function UI:Update()
     if self.collapsed then self.body:Hide(); self.scroll:Hide(); self.footer:Hide()
     else self.body:Show(); self.scroll:Show(); self.footer:Show() end
     local data = self.market:Get(self.selectedItemID)
+    local now = self.clock()
+    self:UpdateInsight(data, now)
     -- A completed historical observation remains visible after reopening AH.
     if data.current and (readOnly or self.scanner.state == "IDLE" or self.scanner.itemID ~= self.selectedItemID) then
         local s = data.current
@@ -402,7 +427,7 @@ function UI:Update()
     else self.historicalDetails:Hide(); self.currentDetails:Show() end
     if self.detailMode == "HISTORY" then self.historyButton:Disable(); self.currentButton:Enable()
     else self.currentButton:Disable(); self.historyButton:Enable() end
-    local history = MP.UIViewModel.History(data, self.clock())
+    local history = MP.UIViewModel.History(data, now)
     history.changes = history.change7 .. " / " .. history.change30
     for key, widget in pairs(self.historyValues) do widget:SetText(history[key]) end
     self.progress:SetText(readOnly and "READ ONLY | Stored history | Open AH to scan"

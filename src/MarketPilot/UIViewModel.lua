@@ -78,6 +78,105 @@ function View.ReferenceMoney(value)
     if not MP.HistoryMath.Finite(value) or value <= 0 then return "Needs history" end
     return value % 1 == 0 and View.Money(value) or string.format("%.1fc", value)
 end
+
+local function shortMoney(value)
+    return View.Money(value):gsub("^0g ", ""):gsub("^0s ", ""):gsub(" ", "")
+end
+local function groupedCount(value)
+    local text = string.format("%.0f", value)
+    return text:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+end
+local function magnitude(value)
+    if value ~= 0 and math.abs(value) < 0.1 then return "less than 0.1%" end
+    return string.format("%.1f%%", math.abs(value))
+end
+local function insightSentence(message)
+    local c = message.code
+    local fixed = {
+        NO_SCAN = "No scan recorded for this item.",
+        INVALID_RECORD = "The recorded scan cannot be read.",
+        EMPTY_SCAN = "No price levels returned in the latest scan.",
+        INCONSISTENT_RECORD = "Some recorded fields are inconsistent; their relationship cannot be assessed.",
+        ANOMALY_UNAVAILABLE = "Retained and excluded price-level counts cannot be assessed from this record.",
+        FILTER_INSUFFICIENT = "Not enough price variation/data for reliable outlier filtering.",
+        FILTER_UNAVAILABLE = "Outlier-filtering sufficiency was not recorded.",
+        MORE_HISTORY = "More history is needed to judge whether this price and listed quantity are high or low for this market.",
+        HISTORY_AVAILABLE = "Supported historical comparisons are shown in History.",
+        SCAN_FAILED_STORED = "The new scan failed; showing the previous recorded scan.",
+        SCAN_FAILED = "The new scan failed.",
+        UPDATE_FAILED_STORED = "The latest update reported an error; the available scan observation is shown below.",
+        UPDATE_FAILED = "The latest update reported an error.",
+        UPDATE_STATUS_UNAVAILABLE = "The latest update status cannot be assessed.",
+        SCAN_TIME_UNAVAILABLE = "Recorded scan age is unavailable.",
+    }
+    if fixed[c] then return fixed[c] end
+    if c == "REFERENCE_BAND" then return "The latest recorded scan's reference price is " .. shortMoney(message.price)
+        .. ", with a central price band of " .. shortMoney(message.q1) .. "-" .. shortMoney(message.q3) .. "." end
+    if c == "REFERENCE" then return "The latest recorded scan's reference price is " .. shortMoney(message.price) .. "." end
+    if c == "BAND" then return "The latest recorded scan's central price band is " .. shortMoney(message.q1) .. "-" .. shortMoney(message.q3) .. "." end
+    if c == "LOWEST_BELOW" then return "The lowest listed price is " .. shortMoney(message.price)
+        .. (math.abs(message.change) < 0.1 and ", " or ", about ") .. magnitude(message.change) .. " below that reference." end
+    if c == "LOWEST_EQUAL" then return "The lowest listed price is " .. shortMoney(message.price) .. ", equal to that reference." end
+    if c == "LOWEST" then return "The lowest recorded listed price is " .. shortMoney(message.price) .. "." end
+    if c == "QUANTITY" then return "This scan covers " .. groupedCount(message.count) .. (message.count == 1 and " listed unit." or " listed units.") end
+    if c == "ANOMALY_COUNTS" then
+        local retained = message.suspicious == 0 and "No unusual price levels were retained" or (groupedCount(message.suspicious)
+            .. (message.suspicious == 1 and " unusual price level was retained" or " unusual price levels were retained"))
+        local excluded = message.extreme == 0 and "no price levels were excluded" or (groupedCount(message.extreme)
+            .. (message.extreme == 1 and " extreme price level was excluded" or " extreme price levels were excluded"))
+        return retained .. "; " .. excluded .. "."
+    end
+    if c == "HISTORY_CHANGE" then
+        if message.change == 0 then return "The recorded reference price equals its 7-day median." end
+        return "The recorded reference price is " .. magnitude(message.change) .. (message.change < 0 and " below" or " above") .. " its 7-day median."
+    end
+    if c == "HISTORY_TREND" then
+        local directions = { RISING = "rising", STABLE = "stable", FALLING = "falling" }
+        return "The available observations show a " .. directions[message.label] .. " price trend."
+    end
+    if c == "HISTORY_TREND_VALUE" then return "The recorded trend estimate is " .. View.Percent(message.change) .. "/day; its direction label is unavailable." end
+    if c == "HISTORY_SUPPLY" then
+        local positions = { LOW_SUPPLY = "below", NORMAL_SUPPLY = "near", HIGH_SUPPLY = "above" }
+        return "Listed supply in this scan is " .. positions[message.label] .. " its recent usual level ("
+            .. string.format("%.2fx", message.ratio) .. " its 7-day median)."
+    end
+    if c == "HISTORY_SUPPLY_VALUE" then return "The recorded listed-supply ratio is " .. string.format("%.2fx", message.ratio)
+        .. " its 7-day median; its supply label is unavailable." end
+    if c == "HISTORY_POSITION" then
+        local positions = { CHEAP_VS_HISTORY = "low", NORMAL_RANGE = "in the middle range", EXPENSIVE_VS_HISTORY = "high" }
+        return "The recorded reference is " .. positions[message.label] .. " among 30-day price observations (percentile "
+            .. string.format("%.1f", message.percentile) .. ")."
+    end
+    if c == "HISTORY_POSITION_VALUE" then return "The recorded 30-day price percentile is " .. string.format("%.1f", message.percentile)
+        .. "; its price-position label is unavailable." end
+    if c == "CURRENT_UNAVAILABLE" or c == "HISTORY_MISSING" or c == "HISTORY_UNAVAILABLE" then
+        local names = { REFERENCE = "reference price", BAND = "central price band", LOWEST = "lowest listed price", QUANTITY = "listed quantity",
+            CHANGE = "7-day price comparison", TREND = "trend direction", SUPPLY = "historical supply comparison", POSITION = "30-day price position" }
+        local parts = {}; for _, key in ipairs(message.metrics) do parts[#parts + 1] = names[key] end
+        local prefix = c == "HISTORY_MISSING" and "More history is needed for: " or "Not assessable from this record: "
+        return prefix .. table.concat(parts, ", ") .. "."
+    end
+    if c == "SCAN_AGE" then
+        local seconds = message.seconds
+        if seconds < 60 then return "Latest recorded scan: less than a minute ago." end
+        local value, unit = math.floor(seconds / 60), "minute"
+        if seconds >= 86400 then value, unit = math.floor(seconds / 86400), "day"
+        elseif seconds >= 3600 then value, unit = math.floor(seconds / 3600), "hour" end
+        return "Latest recorded scan: " .. groupedCount(value) .. " " .. unit .. (value == 1 and "" or "s") .. " ago."
+    end
+    if c == "SCAN_CLOCK" then return "Recorded timestamp: " .. string.format("%.0f", message.timestamp) .. "; age unavailable, check the client clock." end
+    return "This part of the observation cannot be assessed."
+end
+
+function View.Insight(insight)
+    local result = {}
+    for _, section in ipairs({ "current", "history" }) do
+        local lines = {}
+        for _, message in ipairs(insight[section]) do lines[#lines + 1] = insightSentence(message) end
+        result[section] = table.concat(lines, "\n")
+    end
+    return result
+end
 function View.Watch(data)
     local current, a, signal = data.current, data.analytics, data.signals
     local now = "No scan"
