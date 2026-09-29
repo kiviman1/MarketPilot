@@ -1,5 +1,5 @@
 local _, MP = ...
-local VERSION = "0.5.5"
+local VERSION = "0.5.6"
 local debugEnabled = false
 
 local function debug(message)
@@ -7,6 +7,7 @@ local function debug(message)
 end
 
 local panel, market, batch, advance
+local lastBrowseError
 local function computedMarketKey()
     local realmOK, realm = false, nil
     local factionOK, faction = false, nil
@@ -89,6 +90,9 @@ end
 
 local function notify(message)
     if debugEnabled or (MP.scanner and MP.scanner.state == "ERROR") then debug(message) end
+    local browseError = MP.scanner and MP.scanner.browseError
+    if browseError and browseError ~= lastBrowseError then debug("AH browse: " .. browseError) end
+    lastBrowseError = browseError
     if market then market:Record(MP.scanner) end
     if panel then panel:Guard(panel.Update) end
 end
@@ -213,7 +217,9 @@ local function onEvent(event, itemID, success)
         initializeHistory(); initializePreferences(); scanner:OnHouseOpened(); panel:Open()
     elseif event == "AUCTION_HOUSE_CLOSED" then batch:Cancel(); scanner:OnHouseClosed(); panel:OnHouseClosed()
     elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" then scanner:OnReady()
-    elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID) end
+    elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then scanner:OnCommodityResults(itemID)
+    elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then scanner:OnBrowseResults()
+    elseif event == "AUCTION_HOUSE_BROWSE_FAILURE" then scanner:OnBrowseFailure() end
     advance()
 end
 
@@ -231,6 +237,21 @@ for _, event in ipairs({
         startupError = "UNKNOWN: cannot register " .. event .. ": " .. tostring(err)
         scanner.blockedReason = startupError
         scanner:Fail(startupError)
+    end
+end
+
+-- Browse navigation is optional. An unsupported event must not disable the
+-- already validated commodity scanner or read-only history.
+do
+    local event = "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"
+    local ok, err = pcall(frame.RegisterEvent, frame, event)
+    if not ok or err == false then
+        scanner.browseBlockedReason = "UNKNOWN: cannot register " .. event .. ": " .. tostring(err)
+        debug(scanner.browseBlockedReason)
+    end
+    local failureOK, failureError = pcall(frame.RegisterEvent, frame, "AUCTION_HOUSE_BROWSE_FAILURE")
+    if not failureOK or failureError == false then
+        debug("optional AH browse failure event unavailable; deadline remains active: " .. tostring(failureError))
     end
 end
 

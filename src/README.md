@@ -263,12 +263,24 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.5
+## In-game acceptance for 0.5.6
 
-The 0.5.5 release archive is built explicitly with `python tools/package.py`.
+The release archive is built explicitly with `python tools/package.py`.
 CI validates the source manifest without producing a ZIP. The archive contains
 only the `MarketPilot/` runtime folder; SavedVariables remain in the client.
 This checklist records in-client checks separately from offline test coverage.
+
+For 0.5.6, finish a gathering batch, then click Firebloom in Market Watch. Its
+commodity analysis should refresh, followed by a native Browse Auctions search
+with Firebloom in the search box and matching results on the left. Repeat for
+Copper Ore and Light Leather, including from an unrelated AH category or tab.
+Native browse uses an exact-name request without the prior category/level filters.
+An item with no listings should show Blizzard's empty result rather than an old row.
+Click repeatedly while scanning/opening search: only one commodity request and
+one subsequent browse request should occur. Refresh and batch must not navigate
+the native list. Close AH during the wait, then reopen: no stale search should run.
+Outside AH, selecting stored items must remain read-only. If native navigation is
+unavailable, retain scan data and report `/mp status` output; do not infer success.
 
 1. Check the logo in the character-screen addon list. The minimap icon should
    enter the EllesmereUI container; open/close the container, AH and Settings

@@ -174,6 +174,20 @@ unchanged. Watch columns use No scan, No price, Failed and explained history das
 Known zero counts remain zero; unknown prices remain absent internally.
 
 AH parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
+An explicit item-row click also requests native Browse Auctions navigation.
+Scanner completes and records the commodity sample first, then waits for throttle
+readiness before AuctionAPI invokes the source-backed native exact-name browse
+path. This optional browse phase participates in `IsActive` and shares the scan's
+one deadline; repeated clicks, batch starts, and manual refreshes cannot dispatch
+alongside it. Browse completion requires the optional `AUCTION_HOUSE_BROWSE_RESULTS_UPDATED`
+event plus throttle readiness and `HasFullBrowseResults() == true`. The event has
+no request ID and can accompany commodity results, so it alone cannot unlock the
+scanner. These checks run only on result/ready events. The optional native browse
+failure event ends navigation immediately; missing failure-event support retains
+the deadline. Browse rows are not read or saved by MarketPilot. A failed browse preserves
+the commodity observation; an ambiguous dispatch blocks further scans until AH
+is closed/reopened. Missing navigation capabilities do not disable ordinary scans.
+Batch, Refresh, slash scans and read-only standalone selections never navigate AH.
 Watch explicitly uses DIALOG strata and frame level 100, reapplied after reparenting
 on open. Its children inherit the dialog layer. Settings uses DIALOG level 200 so
 it stays above Watch regardless of open order. A guarded fixed-frame-level option

@@ -1541,4 +1541,377 @@ test("explicit dialog levels also work when the optional fixed-level API is unav
     assert(f.ahCalls == 0 and #f.sent == 0)
 end)
 
+-- Test the native-browse request boundary while keeping real Core/Scanner/UI and
+-- commodity reads. AuctionAPI's client bridge is covered separately.
+local function browseFixture(configure)
+    local f = fixture(function(g)
+        g.deadlines, g.preparedBrowse, g.nativeBrowse = {}, {}, {}
+        g.browseFull, g.browseReadyReads = true, 0
+        g.env.C_Timer = { After = function(seconds, callback)
+            assert(seconds == 30)
+            g.deadlines[#g.deadlines + 1] = callback
+        end }
+        if configure then configure(g) end
+    end)
+    f.scanner.api.PrepareBrowse = function(_, itemID)
+        f.preparedBrowse[#f.preparedBrowse + 1] = itemID
+        if f.prepareError then return nil, f.prepareError end
+        local name = f.env.GetItemInfo and f.env.GetItemInfo(itemID)
+        if not name then return nil, "UNKNOWN: client item name unavailable" end
+        return { name = name }
+    end
+    f.scanner.api.QueryBrowse = function(_, name)
+        assert(f.scanner.ahOpen and f.scanner.state == "DONE" and f.scanner.sample)
+        assert(name:sub(1, 12) == "Client item ", "never search an ID or a display placeholder")
+        f.nativeBrowse[#f.nativeBrowse + 1] = name
+        if f.browseFailure then return false, f.browseFailure, f.browseUncertain end
+        return true
+    end
+    f.scanner.api.AreBrowseResultsReady = function()
+        f.browseReadyReads = f.browseReadyReads + 1
+        if f.browseReadyError then return nil, f.browseReadyError end
+        return f.ready and f.browseFull == true
+    end
+    return f
+end
+
+test("post-batch row click serializes one commodity scan and one native browse without duplicate history", function()
+    local f = browseFixture(); f:open(); f.panel.batchButton:Click()
+    local ids = f.mp.Items.List()
+    for _, id in ipairs(ids) do assert(f.scanner.itemID == id); f:complete(id) end
+    assert(f.mp.batch.state == "DONE" and #f.sent == #ids and #f.nativeBrowse == 0 and #f.preparedBrowse == 0)
+    f.now = f.now + 700
+    local writes, append = 0, f.mp.market.db.Append
+    f.mp.market.db.Append = function(db, ...) writes = writes + 1; return append(db, ...) end
+    f:select(2771)
+    assert(f.panel.selectedItemID == 2771 and f.scanner.state == "QUERYING" and #f.sent == #ids + 1)
+    assert(f.scanner.browse.phase == "QUEUED" and f.preparedBrowse[1] == 2771 and #f.nativeBrowse == 0)
+    assert(#f.deadlines == #ids + 1)
+    f.ready = false; f:complete(2771)
+    assert(f.scanner.state == "DONE" and f.scanner.browse.phase == "WAITING" and f.scanner:IsActive())
+    assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.panel.view.quantity == "472")
+    assert(#f.mp.market.db:History(2771) == 2 and #f.nativeBrowse == 0 and writes == 1)
+    local saved = clone(f.env.MarketPilotDB)
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED") -- An unrelated early event cannot complete a waiting request.
+    assert(f.scanner.browse.phase == "WAITING")
+    f.ready = true
+    f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.scanner.browse.phase == "QUERYING" and #f.nativeBrowse == 1 and f.nativeBrowse[1] == "Client item 2771")
+    f:complete(2771) -- Duplicate commodity event does not duplicate native navigation.
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    assert(not f.scanner:IsActive() and f.scanner.state == "DONE" and f.scanner.browse == nil)
+    assert(f.panel.scan.enabled and f.panel.scan.text == "Refresh" and #f.nativeBrowse == 1)
+    assert(#f.deadlines == #ids + 1 and writes == 1); same(f.env.MarketPilotDB, saved)
+end)
+
+test("browse waiting and querying block repeated rows refresh slash scan and new batches", function()
+    local f = browseFixture(); f:open(); f:select(2770)
+    f.ready = false; f:complete()
+    for _, phase in ipairs({ "WAITING", "QUERYING" }) do
+        assert(f.scanner.browse.phase == phase and f.scanner:IsActive())
+        assert(f.panel.view.state == "BROWSING" and f.panel.values.state.text == "Opening AH search")
+        assert(not f.panel.scan.enabled and not f.panel.batchButton.enabled and not f.panel.rows[2771].enabled)
+        assert(f.panel.scan.text == "Opening AH search...")
+        local prepared, sent, native, timers = #f.preparedBrowse, #f.sent, #f.nativeBrowse, #f.deadlines
+        f:select(2771, true); f.panel.scan:Click(true); f.panel.batchButton:Click(true)
+        f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
+        assert(f.panel.selectedItemID == 2770 and f.scanner.itemID == 2770 and not f.mp.batch.active)
+        assert(#f.preparedBrowse == prepared and #f.sent == sent and #f.nativeBrowse == native and #f.deadlines == timers)
+        f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    end
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    assert(f.panel.scan.enabled and f.panel.batchButton.enabled)
+end)
+
+test("refresh slash scan batch and stored row selection never request native navigation", function()
+    local f = browseFixture(); f:open()
+    f.panel.scan:Click(); f:complete()
+    f.env.SlashCmdList.MARKETPILOT("scan"); f:complete()
+    f.panel.batchButton:Click()
+    for _, id in ipairs(f.mp.Items.List()) do f:complete(id) end
+    assert(#f.preparedBrowse == 0 and #f.nativeBrowse == 0)
+    f.panel.watchRequested = true; f:event("AUCTION_HOUSE_CLOSED")
+    local saved, sent, timers = clone(f.env.MarketPilotDB), #f.sent, #f.deadlines
+    f:select(2771); f.panel.scan:Click(true); f.panel.batchButton:Click(true)
+    f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
+    assert(f.panel.mode == "STANDALONE" and f.panel.selectedItemID == 2771 and f.scanner.state == "IDLE")
+    assert(#f.sent == sent and #f.deadlines == timers and #f.preparedBrowse == 0 and #f.nativeBrowse == 0)
+    same(f.env.MarketPilotDB, saved)
+end)
+
+test("AH close cancels queued waiting and dispatched navigation and late events cannot restart it", function()
+    for _, phase in ipairs({ "QUEUED", "WAITING", "QUERYING" }) do
+        local f = browseFixture(); f:open(); f:select(2770)
+        if phase ~= "QUEUED" then f.ready = phase == "QUERYING"; f:complete() end
+        assert(f.scanner.browse.phase == phase)
+        local saved, native, sent = clone(f.env.MarketPilotDB), #f.nativeBrowse, #f.sent
+        f.panel.watchRequested = true; f:event("AUCTION_HOUSE_CLOSED")
+        f.ready = true
+        f:complete(2770); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+        f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f.deadlines[1]()
+        assert(f.scanner.browse == nil and f.scanner.state == "IDLE" and not f.scanner:IsActive())
+        assert(#f.nativeBrowse == native and #f.sent == sent)
+        same(f.env.MarketPilotDB, saved)
+        f:open(); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+        assert(f.scanner.state == "IDLE" and #f.nativeBrowse == native and #f.sent == sent)
+    end
+end)
+
+test("failed commodity read clears queued navigation instead of opening an unverified result", function()
+    local f = browseFixture(); f.rows = { { quantity = 2 } }
+    f:open(); f:select(2770); f:complete()
+    assert(f.scanner.state == "ERROR" and not f.scanner.browse and #f.nativeBrowse == 0)
+    assert(#f.mp.market.db:History(2770) == 0 and f.panel.view.cleanMedian == "No price data")
+    f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f.deadlines[1]()
+    assert(f.scanner.state == "ERROR" and #f.nativeBrowse == 0)
+end)
+
+test("commodity deadline discards queued native navigation before it can send", function()
+    for _, ready in ipairs({ false, true }) do
+        local f = browseFixture(); f.ready = ready
+        f:open(); f:select(2770)
+        assert(f.scanner.browse.phase == "QUEUED" and #f.nativeBrowse == 0 and #f.deadlines == 1)
+        f.deadlines[1]()
+        assert(f.scanner.state == "ERROR" and f.scanner.browse == nil and not f.scanner:IsActive())
+        assert((f.scanner.uncertainQuery == true) == ready)
+        f.ready = true; f:complete(2770); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+        f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+        assert(#f.nativeBrowse == 0 and #f.mp.market.db:History(2770) == 0)
+        assert(f.panel.view.cleanMedian == "No price data")
+    end
+end)
+
+test("one shared deadline cancels throttle-waiting browse while keeping the successful commodity result", function()
+    local f = browseFixture(); f:open(); f:select(2770)
+    f.ready = false; f:complete()
+    local sample, saved = f.scanner.sample, clone(f.env.MarketPilotDB)
+    assert(#f.deadlines == 1 and f.scanner.browse.phase == "WAITING")
+    f.deadlines[1]()
+    assert(f.scanner.state == "DONE" and f.scanner.sample == sample and not f.scanner:IsActive())
+    assert(not f.scanner.uncertainQuery and f.scanner.browseError:find("throttle wait timed out", 1, true))
+    assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.panel.scan.enabled)
+    assert(f.panel.view.message:find("AH search unavailable", 1, true))
+    f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    assert(#f.nativeBrowse == 0 and #f.deadlines == 1); same(f.env.MarketPilotDB, saved)
+    f.panel.scan:Click(); f.deadlines[1]() -- Expired token cannot cancel a newer manual scan.
+    assert(f.scanner.state == "QUERYING" and #f.deadlines == 2)
+    f:complete(); assert(f.scanner.state == "DONE" and #f.nativeBrowse == 0)
+end)
+
+test("dispatched browse timeout preserves prices but requires AH reopen before another query", function()
+    local f = browseFixture(); f:open(); f:select(2770); f:complete()
+    local sample, saved = f.scanner.sample, clone(f.env.MarketPilotDB)
+    assert(f.scanner.browse.phase == "QUERYING" and #f.nativeBrowse == 1 and #f.deadlines == 1)
+    f.deadlines[1]()
+    assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.uncertainQuery)
+    assert(f.panel.view.cleanMedian == "0g 2s 0c" and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
+    assert(f.panel.view.message:find("Close and reopen", 1, true))
+    f:select(2771, true); f.panel.scan:Click(true); f.panel.batchButton:Click(true)
+    f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.scanner.uncertainQuery and #f.sent == 1 and #f.nativeBrowse == 1)
+    assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.analysis)
+    assert(f.panel.view.cleanMedian == "0g 2s 0c" and not f.mp.batch.active)
+    same(f.env.MarketPilotDB, saved)
+    f:event("AUCTION_HOUSE_CLOSED"); f:open(); f.panel.scan:Click(); f:complete()
+    assert(not f.scanner.uncertainQuery and f.scanner.state == "DONE" and #f.sent == 2 and #f.nativeBrowse == 1)
+end)
+
+test("browse dispatch failures retain commodity prices and distinguish safe failure from ambiguity", function()
+    for _, uncertain in ipairs({ false, true }) do
+        local f = browseFixture(); f:open(); f:select(2770)
+        f.browseFailure, f.browseUncertain = "UNKNOWN: fixture native browse failed", uncertain
+        f:complete()
+        assert(f.scanner.state == "DONE" and f.scanner.analysis and f.scanner.sample and not f.scanner:IsActive())
+        assert(f.scanner.browseError == f.browseFailure and (f.scanner.uncertainQuery == true) == uncertain)
+        assert(f.panel.view.cleanMedian == "0g 2s 0c" and #f.mp.market.db:History(2770) == 1)
+        assert(f.panel.scan.enabled == not uncertain and #f.nativeBrowse == 1)
+        local saved = clone(f.env.MarketPilotDB)
+        if uncertain then
+            local sample, analysis = f.scanner.sample, f.scanner.analysis
+            f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
+            assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.analysis == analysis)
+            assert(#f.sent == 1 and #f.nativeBrowse == 1 and not f.mp.batch.active)
+        end
+        f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f.deadlines[1]()
+        assert(f.scanner.state == "DONE" and #f.nativeBrowse == 1); same(f.env.MarketPilotDB, saved)
+    end
+end)
+
+test("missing browse capabilities or unresolved item names keep commodity scans working without placeholder searches", function()
+    for _, mode in ipairs({ "capability", "name", "deadline" }) do
+        local f = browseFixture(); f:open()
+        if mode == "capability" then f.prepareError = "UNKNOWN: native browse bridge unavailable"
+        elseif mode == "name" then f.namesReady = false; f.mp.Items.InvalidateMetadata(2770)
+        else f.scanner.schedule = nil end
+        f:select(2770); f:complete()
+        assert(f.scanner.state == "DONE" and not f.scanner.browse and not f.scanner:IsActive())
+        assert(f.scanner.browseError and not f.scanner.blockedReason and not f.scanner.uncertainQuery)
+        assert(#f.nativeBrowse == 0 and #f.sent == 1 and #f.mp.market.db:History(2770) == 1)
+        assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.panel.view.message:find("AH search unavailable", 1, true))
+        assert(f:has("AH browse:") and f.panel.scan.enabled)
+        if mode == "name" then assert(f.panel.name.text == "Item #2770 (loading)") end
+    end
+end)
+
+test("optional browse event registration rejection disables only native navigation", function()
+    for _, mode in ipairs({ "error", "false" }) do
+        local f = browseFixture(function(g)
+            local create = g.env.CreateFrame
+            g.env.CreateFrame = function(...)
+                local frame = create(...); local register = frame.RegisterEvent
+                frame.RegisterEvent = function(self, event)
+                    if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+                        if mode == "error" then error("unknown event") else return false end
+                    end
+                    return register(self, event)
+                end
+                return frame
+            end
+        end)
+        assert(f.scanner.browseBlockedReason and not f.scanner.blockedReason)
+        f:open(); f:select(2770); f:complete()
+        assert(f.scanner.state == "DONE" and #f.sent == 1 and #f.preparedBrowse == 0 and #f.nativeBrowse == 0)
+        assert(#f.mp.market.db:History(2770) == 1 and f.panel.view.cleanMedian == "0g 2s 0c")
+        assert(f.panel.view.message:find("AH search unavailable", 1, true) and f.panel.scan.enabled)
+    end
+end)
+
+test("browse completion requires a result event plus ready and full results before releasing controls", function()
+    for _, finalEvent in ipairs({ "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_THROTTLED_SYSTEM_READY" }) do
+        local f = browseFixture(); f:open(); f:select(2770); f:complete()
+        local sample, saved = f.scanner.sample, clone(f.env.MarketPilotDB)
+        assert(f.scanner.browse.phase == "QUERYING")
+        f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+        assert(f.scanner:IsActive() and f.browseReadyReads == 0) -- Ready alone is not a browse result.
+        f.ready = false; f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+        assert(f.scanner.browse.phase == "QUERYING" and f.scanner:IsActive() and not f.panel.scan.enabled)
+        f.browseFull, f.ready = false, true
+        f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+        assert(f.scanner:IsActive() and not f.panel.batchButton.enabled and not f.panel.rows[2771].enabled)
+        f.panel.scan:Click(true); f:select(2771, true)
+        assert(#f.sent == 1 and #f.nativeBrowse == 1 and #f.deadlines == 1)
+        f.browseFull = true; f:event(finalEvent)
+        assert(not f.scanner:IsActive() and f.scanner.state == "DONE" and f.scanner.sample == sample)
+        assert(f.panel.view.state == "DONE" and f.panel.values.state.text == "Complete")
+        assert(f.panel.scan.enabled and f.panel.batchButton.enabled and not f.scanner.browseError)
+        local reads = f.browseReadyReads
+        f:event(finalEvent); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f.deadlines[1]()
+        assert(f.browseReadyReads == reads and #f.nativeBrowse == 1)
+        same(f.env.MarketPilotDB, saved)
+    end
+end)
+
+test("unknown browse readiness fails closed while preserving completed prices and history", function()
+    local f = browseFixture(); f:open(); f:select(2770); f:complete()
+    local sample, analysis, saved = f.scanner.sample, f.scanner.analysis, clone(f.env.MarketPilotDB)
+    f.browseReadyError = "UNKNOWN: native browse result completeness unavailable"
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    assert(f.scanner.state == "DONE" and not f.scanner:IsActive() and f.scanner.uncertainQuery)
+    assert(f.scanner.sample == sample and f.scanner.analysis == analysis and f.scanner.browseError == f.browseReadyError)
+    assert(f.panel.view.cleanMedian == "0g 2s 0c" and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
+    f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
+    f.browseReadyError = nil; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f.deadlines[1]()
+    assert(f.scanner.sample == sample and f.scanner.uncertainQuery and #f.sent == 1 and #f.nativeBrowse == 1)
+    same(f.env.MarketPilotDB, saved)
+end)
+
+test("native browse failure only affects dispatched navigation and keeps its commodity result", function()
+    local f = browseFixture(); f:open(); f:select(2770)
+    f:event("AUCTION_HOUSE_BROWSE_FAILURE")
+    assert(f.scanner.state == "QUERYING" and f.scanner.browse.phase == "QUEUED" and not f.scanner.browseError)
+    f.ready = false; f:complete()
+    f:event("AUCTION_HOUSE_BROWSE_FAILURE")
+    assert(f.scanner.browse.phase == "WAITING" and not f.scanner.browseError and f.scanner:IsActive())
+    local sample, saved = f.scanner.sample, clone(f.env.MarketPilotDB)
+    f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.scanner.browse.phase == "QUERYING")
+    f:event("AUCTION_HOUSE_BROWSE_FAILURE")
+    assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.browseError)
+    assert(f.scanner.uncertainQuery and not f.scanner:IsActive() and not f.panel.scan.enabled)
+    assert(f.panel.view.cleanMedian == "0g 2s 0c" and #f.nativeBrowse == 1)
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_BROWSE_FAILURE"); f.deadlines[1]()
+    same(f.env.MarketPilotDB, saved)
+    f:event("AUCTION_HOUSE_CLOSED"); f:event("AUCTION_HOUSE_BROWSE_FAILURE")
+    assert(f.scanner.state == "IDLE" and not f.scanner.browseError and not f.scanner.uncertainQuery)
+    f:open(); f.panel.scan:Click(); f:event("AUCTION_HOUSE_BROWSE_FAILURE")
+    assert(f.scanner.state == "QUERYING" and not f.scanner.browse and not f.scanner.browseError)
+    f:complete(); assert(f.scanner.state == "DONE" and #f.nativeBrowse == 1)
+end)
+
+test("unsupported browse failure event does not disable normal updated-event navigation", function()
+    for _, mode in ipairs({ "error", "false" }) do
+        local f = browseFixture(function(g)
+            local create = g.env.CreateFrame
+            g.env.CreateFrame = function(...)
+                local frame = create(...); local register = frame.RegisterEvent
+                frame.RegisterEvent = function(self, event)
+                    if event == "AUCTION_HOUSE_BROWSE_FAILURE" then
+                        if mode == "error" then error("unknown event") else return false end
+                    end
+                    return register(self, event)
+                end
+                return frame
+            end
+        end)
+        assert(not f.scanner.browseBlockedReason and not f.scanner.blockedReason)
+        f:open(); f:select(2770); f:complete()
+        assert(f.scanner.browse.phase == "QUERYING" and #f.nativeBrowse == 1)
+        f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+        assert(f.scanner.state == "DONE" and not f.scanner:IsActive() and not f.scanner.browseError)
+        assert(#f.mp.market.db:History(2770) == 1)
+    end
+end)
+
+test("row click wires real AuctionAPI bridge to localized Blizzard search and full-result completion", function()
+    local localized, nativeCalls, order, timers, fullReads = "Minerai de cuivre", {}, {}, {}, 0
+    local f = fixture(function(g)
+        g.env.C_Timer = { After = function(seconds, callback) assert(seconds == 30); timers[#timers + 1] = callback end }
+        g.env.GetItemInfo = function(id)
+            return id == 2770 and localized or "Client item " .. id, nil, nil, nil, nil, nil, nil, nil, nil, id + 10000
+        end
+        local frame = g.env.AuctionHouseFrame
+        local buyMode = {}; g.env.AuctionHouseFrameDisplayMode = { Buy = buyMode }
+        g.env.Enum = { AuctionHouseFilter = { ExactMatch = 7 } }
+        g.env.g_auctionHouseSortsBySearchContext = {}
+        frame.GetCategoriesList = function(self)
+            assert(self == frame)
+            return { SetSelectedCategory = function(_, category) assert(category == nil); order[#order + 1] = "category" end }
+        end
+        frame.SetDisplayMode = function(self, mode)
+            assert(self == frame and mode == buyMode); order[#order + 1] = "mode"
+            self.searchText = "" -- Native Buy OnShow can clear the existing text.
+        end
+        frame.SetSearchText = function(self, name)
+            assert(self == frame and name == localized); order[#order + 1] = "text"; self.searchText = name; return true
+        end
+        frame.SendBrowseQuery = function(self, name, minimum, maximum, filters)
+            assert(self == frame and self.searchText == localized and name == localized)
+            assert(minimum == nil and maximum == nil and #filters == 1 and filters[1] == 7)
+            order[#order + 1] = "send"; nativeCalls[#nativeCalls + 1] = name
+            g.ready, g.browseFull = false, false
+        end
+        g.env.C_AuctionHouse.SendBrowseQuery = function() error("dispatch must stay owned by the native frame") end
+        g.env.C_AuctionHouse.HasFullBrowseResults = function(...)
+            assert(select("#", ...) == 0); fullReads = fullReads + 1; return g.browseFull
+        end
+    end)
+    f:open(); f:select(2770)
+    assert(f.scanner.state == "QUERYING" and #nativeCalls == 0 and #f.sent == 1)
+    f:complete()
+    assert(f.scanner.state == "DONE" and f.scanner.browse.phase == "QUERYING" and #nativeCalls == 1)
+    assert(table.concat(order, ",") == "category,mode,text,send" and nativeCalls[1] == localized)
+    assert(f.panel.name.text == localized and f.panel.view.cleanMedian == "0g 2s 0c")
+    local saved = clone(f.env.MarketPilotDB)
+    f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    assert(f.scanner:IsActive() and fullReads == 0) -- Busy throttle short-circuits cache readiness.
+    f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    assert(f.scanner:IsActive() and fullReads == 1)
+    f.browseFull = true; f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    assert(not f.scanner:IsActive() and f.scanner.state == "DONE" and not f.scanner.browseError)
+    assert(fullReads == 2 and #nativeCalls == 1 and #timers == 1 and #f.sent == 1)
+    same(f.env.MarketPilotDB, saved)
+end)
+
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

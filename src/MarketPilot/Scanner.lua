@@ -31,12 +31,15 @@ function Scanner:Summary()
         .. " suspicious=" .. number(analysis and analysis.anomaly.suspiciousCount)
         .. " extreme=" .. number(analysis and analysis.anomaly.extremeCount)
         .. " anomalySufficient=" .. (analysis and (analysis.anomaly.sufficient and "yes" or "no") or "UNKNOWN")
+        .. " browse=" .. (self.browse and self.browse.phase or "NONE")
+        .. (self.browseError and " browseError=" .. self.browseError or "")
         .. " deadline=" .. (self.schedule and (Scanner.TIMEOUT_SECONDS .. "s") or "UNAVAILABLE")
         .. " (copper/unit)" .. (self.error and " error=" .. self.error or "")
 end
 
 function Scanner:Fail(reason)
     self.requestToken = nil
+    self.browse = nil
     self.analysis = nil
     self.state, self.sample, self.summary = "ERROR", nil, nil
     self.error = reason
@@ -50,6 +53,7 @@ end
 
 function Scanner:OnHouseClosed()
     self.requestToken = nil
+    self.browse, self.browseError = nil, nil
     self.stopBatchReason = nil
     self.uncertainQuery = nil
     self.analysis = nil
@@ -59,20 +63,26 @@ function Scanner:OnHouseClosed()
 end
 
 function Scanner:IsActive()
-    return ACTIVE[self.state] == true
+    return ACTIVE[self.state] == true or self.browse ~= nil
 end
 
 function Scanner:CancelWaiting()
     if self.state == "WAITING" then
         self.requestToken = nil
+        self.browse = nil
         self.state, self.error = "IDLE", nil
         self.notify("pending scan cancelled before dispatch. " .. self:Summary())
     end
 end
 
-function Scanner:Start(itemID)
-    if self.uncertainQuery then self:Fail("UNKNOWN: prior dispatch uncertain; close/reopen AH"); return end
-    if ACTIVE[self.state] then
+function Scanner:Start(itemID, openBrowse)
+    if self.uncertainQuery then
+        if self.state == "DONE" and self.browseError then
+            self.notify("AH browse outcome uncertain; close/reopen AH. " .. self:Summary())
+        else self:Fail("UNKNOWN: prior dispatch uncertain; close/reopen AH") end
+        return
+    end
+    if self:IsActive() then
         self.notify("scan already pending; no additional query. " .. self:Summary())
         return
     end
@@ -87,6 +97,7 @@ function Scanner:Start(itemID)
         return
     end
     self.sample, self.summary, self.error = nil, nil, nil
+    self.browse, self.browseError = nil, nil
     self.analysis = nil
     if not self.ahOpen then self:Fail("AH is closed; open it before /mp scan"); return end
     local available, err = self.api:IsAvailable()
@@ -94,6 +105,15 @@ function Scanner:Start(itemID)
         self.stopBatchReason = "UNKNOWN: Auction API unavailable"
         self:Fail(err)
         return
+    end
+    if openBrowse then
+        if self.browseBlockedReason then self.browseError = self.browseBlockedReason
+        elseif not self.schedule then self.browseError = "UNKNOWN: AH browse deadline unavailable"
+        else
+            local request, reason = self.api:PrepareBrowse(self.itemID)
+            if request then self.browse = { name = request.name, phase = "QUEUED" }
+            else self.browseError = reason end
+        end
     end
     self.state = "WAITING"
     if self.schedule then
@@ -103,6 +123,12 @@ function Scanner:Start(itemID)
         -- renewal on throttle events. Superseded callbacks cannot affect a scan.
         local scheduled, scheduleError = pcall(self.schedule, Scanner.TIMEOUT_SECONDS, function()
             if self.requestToken ~= token or not self:IsActive() then return end
+            if self.state == "DONE" and self.browse then
+                local dispatched = self.browse.phase == "QUERYING"
+                self:FinishBrowse(dispatched and "UNKNOWN: AH browse timed out; close/reopen AH"
+                    or "UNKNOWN: AH browse throttle wait timed out", dispatched)
+                return
+            end
             local dispatched = self.state ~= "WAITING"
             self.uncertainQuery = dispatched
             self.stopBatchReason = dispatched and "UNKNOWN: reopen AH" or "TIMEOUT: throttle not ready"
@@ -142,7 +168,51 @@ function Scanner:TryQuery()
 end
 
 function Scanner:OnReady()
-    self:TryQuery()
+    if self.state == "DONE" and self.browse then self:TryBrowse(); self:CheckBrowseCompletion()
+    else self:TryQuery() end
+end
+
+-- Navigation is a second, serialized query requested only by an explicit row
+-- click. Keep the completed commodity sample; browse rows are never persisted.
+function Scanner:FinishBrowse(reason, uncertain)
+    self.requestToken, self.browse = nil, nil
+    self.browseError = reason
+    if uncertain then self.uncertainQuery = true end
+    self.notify(self:Summary())
+end
+
+function Scanner:TryBrowse()
+    if not self.ahOpen or self.state ~= "DONE" or not self.browse or self.browse.phase ~= "WAITING" then return end
+    local ready, reason = self.api:IsReady()
+    if ready == nil then self:FinishBrowse(reason, false); return end
+    if not ready then return end
+    self.browse.phase = "QUERYING"
+    local ok, err, uncertain = self.api:QueryBrowse(self.browse.name)
+    if not ok then self:FinishBrowse(err, uncertain ~= false); return end
+    self.notify(self:Summary())
+end
+
+function Scanner:OnBrowseResults()
+    if self.ahOpen and self.state == "DONE" and self.browse and self.browse.phase == "QUERYING" then
+        self.browse.resultSeen = true
+        self:CheckBrowseCompletion()
+    end
+end
+
+function Scanner:CheckBrowseCompletion()
+    if not self.ahOpen or not self.browse or self.browse.phase ~= "QUERYING" or not self.browse.resultSeen then return end
+    -- The browse event has no request ID and can also accompany commodity
+    -- results. An event alone must not unlock another query while AH is busy
+    -- or its browse cache is incomplete. Check on events only, never poll.
+    local ready, reason = self.api:AreBrowseResultsReady()
+    if ready == nil then self:FinishBrowse(reason, true)
+    elseif ready then self:FinishBrowse() end
+end
+
+function Scanner:OnBrowseFailure()
+    if self.ahOpen and self.state == "DONE" and self.browse and self.browse.phase == "QUERYING" then
+        self:FinishBrowse("UNKNOWN: Blizzard AH browse failed; close/reopen AH", true)
+    end
 end
 
 function Scanner:OnCommodityResults(itemID)
@@ -169,7 +239,8 @@ function Scanner:OnCommodityResults(itemID)
     local analysis, analysisError = MP.Statistics.Analyze(self.sample)
     if not analysis then self:Fail(analysisError); return end
     self.analysis = analysis
-    self.requestToken = nil
+    if self.browse then self.browse.phase = "WAITING" else self.requestToken = nil end
     self.summary, self.error, self.state = summary, nil, "DONE"
     self.notify(self:Summary())
+    self:TryBrowse()
 end

@@ -59,6 +59,96 @@ function AuctionAPI:QueryCommodity(itemID)
     return true
 end
 
+local function browseUI()
+    local frame = AuctionHouseFrame
+    if (type(frame) ~= "table" and type(frame) ~= "userdata") or type(frame.IsShown) ~= "function" then
+        return nil, "UNKNOWN: Blizzard Auction House is unavailable"
+    end
+    local shownOK, shown = pcall(frame.IsShown, frame)
+    if not shownOK or not shown then return nil, "UNKNOWN: Blizzard Auction House is closed" end
+    for _, name in ipairs({ "GetCategoriesList", "SetDisplayMode", "SetSearchText", "SendBrowseQuery" }) do
+        if type(frame[name]) ~= "function" then return nil, "UNKNOWN: missing Blizzard " .. name end
+    end
+    for _, name in ipairs({ "SendBrowseQuery", "HasFullBrowseResults" }) do
+        if type(C_AuctionHouse) ~= "table" or type(C_AuctionHouse[name]) ~= "function" then
+            return nil, "UNKNOWN: missing API " .. name
+        end
+    end
+    if type(g_auctionHouseSortsBySearchContext) ~= "table" then
+        return nil, "UNKNOWN: Blizzard browse sorting is not loaded"
+    end
+    local mode = type(AuctionHouseFrameDisplayMode) == "table" and AuctionHouseFrameDisplayMode.Buy
+    local exact = type(Enum) == "table" and type(Enum.AuctionHouseFilter) == "table"
+        and Enum.AuctionHouseFilter.ExactMatch
+    if type(mode) ~= "table" or not integer(exact, 0) then
+        return nil, "UNKNOWN: Blizzard browse mode or ExactMatch filter is unavailable"
+    end
+    local ok, categories = pcall(frame.GetCategoriesList, frame)
+    if not ok or (type(categories) ~= "table" and type(categories) ~= "userdata")
+        or type(categories.SetSelectedCategory) ~= "function" then
+        return nil, "UNKNOWN: Blizzard browse categories are unavailable"
+    end
+    return { frame = frame, categories = categories, mode = mode, exact = exact }
+end
+
+function AuctionAPI:PrepareBrowse(itemID)
+    if not integer(itemID, 1) or not MP.Items.Contains(itemID) then
+        return nil, "UNKNOWN: invalid browse item"
+    end
+    local ui, reason = browseUI()
+    if not ui then return nil, reason end
+    local ok, metadata = pcall(MP.Items.Metadata, itemID)
+    if not ok or type(metadata) ~= "table" or metadata.known ~= true
+        or type(metadata.name) ~= "string" or not metadata.name:find("%S") then
+        return nil, "UNKNOWN: item name is not loaded for Blizzard browse"
+    end
+    return { name = metadata.name }
+end
+
+function AuctionAPI:QueryBrowse(name)
+    if type(name) ~= "string" or not name:find("%S") then
+        return false, "UNKNOWN: invalid browse name", false
+    end
+    local ui, reason = browseUI()
+    if not ui then return false, reason, false end
+    local ready, readyReason = self:IsReady()
+    if ready ~= true then return false, readyReason or "Blizzard browse is not ready", false end
+    -- Source-backed Forever 1.60.1 (70009), wow-ui-source bd2470a:
+    -- Frame:SetSearchText/SendBrowseQuery, CategoriesList:SetSelectedCategory,
+    -- and Enum.AuctionHouseFilter.ExactMatch. Live behavior still needs testing.
+    -- Buy must be shown before setting text: SearchBar:OnShow clears its text.
+    -- Clearing the category and supplying only ExactMatch avoids stale filters;
+    -- Blizzard's saved filter preferences are left intact.
+    local prepared, preparationError = pcall(function()
+        ui.categories:SetSelectedCategory(nil)
+        ui.frame:SetDisplayMode(ui.mode)
+        if ui.frame:SetSearchText(name) ~= true then error("Blizzard rejected browse search text") end
+    end)
+    if not prepared then return false, "UNKNOWN: browse preparation failed: " .. tostring(preparationError), false end
+    -- This high-level method owns native query state, sorting, headers and the
+    -- Browse Auctions display. Exactly one dispatch; never open a buy dialog.
+    local sent, result = pcall(ui.frame.SendBrowseQuery, ui.frame, name, nil, nil, { ui.exact })
+    if not sent then return false, "UNKNOWN: Blizzard browse failed: " .. tostring(result), true end
+    if result == false then return false, "UNKNOWN: Blizzard browse returned false", true end
+    -- Like commodity search, successful dispatch is not a completed result.
+    return true
+end
+
+function AuctionAPI:AreBrowseResultsReady()
+    local ready, reason = self:IsReady()
+    if ready ~= true then return ready, reason end
+    -- Forever source bd2470a: BrowseResultsFrame.lua uses this predicate;
+    -- AuctionHouseDocumentation.lua:706-712 specifies a boolean with no args.
+    -- Browse update events also follow commodity queries, so an event alone
+    -- cannot prove completion. This predicate is not a request correlation ID.
+    local ok, complete = call("HasFullBrowseResults")
+    if not ok then return nil, complete end
+    if type(complete) ~= "boolean" then
+        return nil, "UNKNOWN: browse completeness must be boolean, got " .. type(complete)
+    end
+    return complete
+end
+
 function AuctionAPI:ReadCommodityResults(itemID)
     if not integer(itemID, 1) then return nil, "UNKNOWN: invalid itemID" end
     local ok, count = call("GetNumCommoditySearchResults", itemID)

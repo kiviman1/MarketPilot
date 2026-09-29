@@ -21,7 +21,7 @@ end
 -- Presentation labels only: module status values remain unchanged for debugging.
 function View.State(state)
     local labels = { IDLE = "Ready", WAITING = "Waiting for AH", QUERYING = "Scanning", COLLECTING = "Reading results",
-        DONE = "Complete", ERROR = "Scan failed", RUNNING = "Scanning", CANCELLED = "Cancelled",
+        DONE = "Complete", ERROR = "Scan failed", RUNNING = "Scanning", CANCELLED = "Cancelled", BROWSING = "Opening AH search",
         ["AH CLOSED"] = "AH closed", ["READ ONLY"] = "Stored history" }
     return labels[state] or "Scan stopped"
 end
@@ -144,6 +144,8 @@ function View.Build(scanner, selectedItemID, metadata, readOnly)
     local analysis = current and scanner.analysis
     local raw, clean, anomaly = analysis and analysis.raw, analysis and analysis.clean, analysis and analysis.anomaly
     local state = readOnly and "READ ONLY" or (scanner.ahOpen and scanner.state or "AH CLOSED")
+    local browsing = not readOnly and scanner.state == "DONE" and scanner.browse ~= nil
+    if browsing then state = "BROWSING" end
     local messages = {
         IDLE = "Choose an item to scan.", WAITING = "Waiting for the Auction House to be ready...",
         QUERYING = "Waiting for commodity results...", COLLECTING = "Reading price levels...",
@@ -164,15 +166,20 @@ function View.Build(scanner, selectedItemID, metadata, readOnly)
             or "Outlier check needs a wider spread of prices."
     end
     if raw and raw.levelCount == 0 then message = "No price levels returned. Prices unavailable for this scan." end
+    if browsing then message = "Opening this item in Auction House search..."
+    elseif not readOnly and scanner.state == "DONE" and scanner.browseError then
+        message = message .. " AH search unavailable; use its Search box. See /mp status."
+    end
     if not readOnly and scanner.uncertainQuery then
-        message = "No reliable result. Close and reopen the Auction House before scanning again."
+        message = scanner.browseError and "Scan data kept. Close and reopen the Auction House before scanning again."
+            or "No reliable result. Close and reopen the Auction House before scanning again."
     end
     return {
         itemID = selectedItemID, name = metadata.name, icon = metadata.icon, state = state,
         message = message, scanEnabled = not readOnly and scanner.ahOpen and not busy and not scanner.blockedReason and not scanner.uncertainQuery,
         itemsEnabled = readOnly or (scanner.ahOpen and not busy and not scanner.blockedReason and not scanner.uncertainQuery),
         buttonText = readOnly and "Read only - open AH to scan" or (scanner.uncertainQuery and "Close and reopen AH"
-            or (busy and "Scanning..." or (current and "Refresh" or "Scan"))),
+            or (browsing and "Opening AH search..." or (busy and "Scanning..." or (current and "Refresh" or "Scan")))),
         lowest = View.Money(raw and raw.min), rawMedian = View.Money(raw and raw.weightedMedian),
         cleanMedian = View.Money(clean and clean.weightedMedian), range = range,
         quantity = count(raw and raw.totalQuantity), levels = count(raw and raw.levelCount),

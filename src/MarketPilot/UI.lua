@@ -122,14 +122,17 @@ function UI:ClickItem(itemID)
     if not self.scanner.ahOpen or self.scanner:IsActive()
         or self.scanner.blockedReason or self.scanner.uncertainQuery then return false end
     self.selectedItemID = itemID
-    self.scanner:Start(itemID)
+    self.scanner:Start(itemID, true)
     self:Update()
     return true
 end
 
 function UI:Scan()
     if self:IsReadOnly() or self.batch.active then return false end
-    return self:ClickItem(self.selectedItemID)
+    if self.scanner:IsActive() or self.scanner.blockedReason or self.scanner.uncertainQuery then return false end
+    self.scanner:Start(self.selectedItemID)
+    self:Update()
+    return true
 end
 
 function UI:StartBatch()
@@ -405,7 +408,7 @@ function UI:Update()
     self.progress:SetText(readOnly and "READ ONLY | Stored history | Open AH to scan"
         or (self.batch.state == "IDLE" and self.scanner.state == "IDLE" and "Ready | " .. #self.items.List() .. " materials"
         or MP.UIViewModel.State(self.batch.state) .. "  " .. self.batch.completed .. " / " .. self.batch.total
-            .. "  |  " .. MP.UIViewModel.State(self.scanner.state)))
+            .. "  |  " .. MP.UIViewModel.State(view.state)))
     self.historyStatus:SetText(self.market.db.status == "OK" and "History: account-wide / realm + faction" or MP.UIViewModel.Error(self.market.db.error))
     if self:IsReadOnly() or self.batch.active or self.scanner:IsActive() or self.scanner.uncertainQuery
         or self.scanner.blockedReason then self.batchButton:Disable() else self.batchButton:Enable() end

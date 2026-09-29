@@ -357,3 +357,38 @@ The addon Notes now describe gathering analysis/history/trends without beta or
 milestone branding. Historical validation records and the existing DB market key
 remain unchanged; a product-description change is not a migration or evidence of
 new client/API compatibility. No new interface number is assumed.
+
+## 0.5.6 native Browse Auctions navigation
+
+The user's screenshots show a completed 56/56 batch and the desired native
+Firebloom name-search result. They also confirm that the prior MarketPilot row
+click did not update Blizzard's Browse Auctions list. They do not validate the
+new integration below.
+
+Source evidence (not an in-client confirmation): Blizzard's Forever UI mirror at
+[`bd2470a`](https://github.com/Gethe/wow-ui-source/tree/bd2470aed543f72697a044e989285b6c83e63f73/Interface/AddOns/Blizzard_AuctionHouseUI/Shared)
+defines `GetCategoriesList():SetSelectedCategory(nil)`, `SetDisplayMode(Buy)`,
+`SetSearchText(name)`, and `SendBrowseQuery(name, nil, nil, {ExactMatch})`.
+The frame method configures native browse state, sorts, result headers, and the
+BrowseSearchStarted callback. The symbolic ExactMatch filter and optional level
+bounds come from that branch's generated AuctionHouse API documentation.
+
+AuctionAPI guards this exact path and its runtime capabilities; it does not try
+alternate signatures or fill protected sale/purchase controls. Native browse
+uses an exact localized item name without previous category/level restrictions,
+without rewriting the user's saved filter preferences. Unknown item names are
+not replaced by display placeholders in search queries.
+
+UNKNOWN until client validation: these methods and the optional
+`AUCTION_HOUSE_BROWSE_RESULTS_UPDATED` event behave as expected in the installed
+Forever build; exact-name results/rendering, empty searches, and event ordering
+must be checked in-game. The source notes that this event can also accompany
+commodity/item queries and provides no request ID. Completion therefore also
+requires throttle readiness and source-backed `HasFullBrowseResults() == true`,
+checked only on result/ready events. This is not request-ID correlation. The
+source-backed optional `AUCTION_HOUSE_BROWSE_FAILURE` is handled without discarding
+the commodity sample; unsupported failure-event registration retains the deadline.
+Missing capability/event support leaves regular
+commodity scanning available. The completed commodity sample is saved once;
+browse results never become market-history observations. No retail/client-version
+compatibility is inferred from the source mirror.
