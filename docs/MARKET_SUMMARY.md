@@ -75,6 +75,13 @@ unavailable. Do not manufacture a replacement direction or classification.
 
 ## Actual generated examples
 
+The following plain-text examples were generated for 0.5.8. From 0.5.9, the same
+sentences render native gold/silver/copper icons in place of currency letters;
+these readable transcripts retain the letters. The band separator now has
+spaces around the dash. Values, sentence rules and the pure insight contract
+are unchanged. Historical half-copper medians also retain their fraction next
+to the copper icon.
+
 These are outputs of `UIViewModel.Insight(MarketInsight.Build(...))`, with
 `current.t=4000000` and `context.now=4000120`, not sample prose assembled by hand.
 The requested 27c reference, 20c–28c band, 18c lowest, 3,145 units, 21 levels,

@@ -4,6 +4,19 @@ local ROOT = "src/MarketPilot/"
 local function read(path)
     local file = assert(io.open(path, "rb")); local value = file:read("*a"); file:close(); return value
 end
+-- Expected markup is independent of the production formatter; values are explicit
+-- denomination components so these integration tests also catch conversion errors.
+local function coins(gold, silver, copper)
+    local parts = {}
+    local function add(value, kind)
+        parts[#parts + 1] = tostring(value) .. "|TInterface\\MoneyFrame\\UI-" .. kind .. "Icon:12:12:0:0|t"
+    end
+    if gold ~= nil then add(gold, "Gold") end
+    if silver ~= nil then add(silver, "Silver") end
+    add(copper, "Copper")
+    return table.concat(parts, " ")
+end
+
 local files = {}
 for line in read(ROOT .. "MarketPilot.toc"):gmatch("[^\r\n]+") do
     if line:sub(1, 1) ~= "#" then files[#files + 1] = line end
@@ -84,10 +97,12 @@ local function fixture(configure)
         function w:SetText(value) self.text = value end
         function w:GetStringHeight()
             -- Conservative deterministic font stub; actual font metrics are a
-            -- client check. Respect explicit newlines and the assigned width.
+            -- client check. A 12px coin occupies about two 7px characters,
+            -- not the literal length of its inline texture path.
             local lines, columns = 0, math.max(1, math.floor((self.width or 1) / 7))
             for line in ((self.text or "") .. "\n"):gmatch("([^\n]*)\n") do
-                lines = lines + math.max(1, math.ceil(#line / columns))
+                local rendered = line:gsub("|T.-|t", "##")
+                lines = lines + math.max(1, math.ceil(#rendered / columns))
             end
             return lines * 14
         end
@@ -194,15 +209,32 @@ test("UI static boundaries and presentation-only money conversion", function()
         end
     end
     local f = fixture()
-    assert(f.view.Money(1) == "0g 0s 1c")
-    assert(f.view.Money(199) == "0g 1s 99c")
-    assert(f.view.Money(10000) == "1g 0s 0c")
-    assert(f.view.Money(123456) == "12g 34s 56c")
-    assert(f.view.Money(9007199254740991) == "900719925474g 9s 91c")
+    assert(f.view.Money(1) == coins(nil, nil, 1))
+    assert(f.view.Money(199) == coins(nil, 1, 99))
+    assert(f.view.Money(10000) == coins(1, 0, 0))
+    assert(f.view.Money(123456) == coins(12, 34, 56))
+    assert(f.view.Money(9007199254740991) == coins(900719925474, 9, 91))
     for _, value in ipairs({ 0, -1, "200", false, 1.5, math.huge, 0/0, 9007199254740992 }) do
         assert(f.view.Money(value) == "No price data")
     end
     assert(f.view.Money(nil) == "No price data")
+end)
+
+test("native coins fit the watch price column and keep exact denominations", function()
+    local f = fixture(); f:open()
+    for _, case in ipairs({ { 10400, coins(1, 4, 0) }, { 10500, coins(1, 5, 0) },
+        { 28700, coins(2, 87, 0) }, { 27, coins(nil, nil, 27) }, { 1000000000, coins(100000, 0, 0) } }) do
+        f.rows = { { unitPrice = case[1], quantity = 1 } }
+        f.panel.scan:Click(); f:complete()
+        local now = f.panel.rows[2770].columns.now
+        assert(now.text == case[2] and f.panel.view.cleanMedian == case[2])
+        assert(f.panel.summary.text:find(case[2], 1, true))
+        -- The deterministic font fixture estimates a 12px coin as 14px.
+        -- Client font/texture rendering still needs a visual check.
+        local rendered = now.text:gsub("|T.-|t", "##")
+        assert(#rendered * 7 <= now.width, "common denomination string exceeds Now column")
+        assert(not now.wordWrap)
+    end
 end)
 
 test("closed/idle model never invents prices or anomaly counts", function()
@@ -278,12 +310,12 @@ test("four-level insufficient display retains known prices and matches analysis"
         { unitPrice = 199, quantity = 200 }, { unitPrice = 200, quantity = 515 } }
     f:open(); f.panel.scan:Click(); f:complete()
     local view = f.panel.view
-    assert(view.lowest == "0g 1s 70c" and view.rawMedian == "0g 2s 0c" and view.cleanMedian == view.rawMedian)
+    assert(view.lowest == coins(nil, 1, 70) and view.rawMedian == coins(nil, 2, 0) and view.cleanMedian == view.rawMedian)
     assert(view.quantity == "735" and view.levels == "4" and view.sufficient == "More price levels needed")
     assert(view.suspicious == "0" and view.extreme == "0" and view.message:find("fewer than 5", 1, true))
     f.rows[3].quantity, f.rows[4].quantity = 400, 355
     f.panel.scan:Click(); f:complete()
-    assert(f.panel.view.quantity == "775" and f.panel.view.cleanMedian == "0g 1s 99c")
+    assert(f.panel.view.quantity == "775" and f.panel.view.cleanMedian == coins(nil, 1, 99))
 end)
 
 test("UI renders clean range and flagged counts without recalculating statistics", function()
@@ -295,8 +327,8 @@ test("UI renders clean range and flagged counts without recalculating statistics
     f.mp.Statistics.Analyze = function() error("UI must not analyze again") end
     f.panel:Update(); f.panel.toggle:Click(); f.panel.toggle:Click()
     local view = f.panel.view
-    assert(view.rawMedian == "100000g 0s 0c" and view.cleanMedian == "1g 0s 0c")
-    assert(view.range == "0g 90s 0c - 1g 10s 0c" and view.extreme == "1" and view.sufficient == "Enough price levels")
+    assert(view.rawMedian == coins(100000, 0, 0) and view.cleanMedian == coins(1, 0, 0))
+    assert(view.range == (coins(nil, 90, 0) .. " - " .. coins(1, 10, 0)) and view.extreme == "1" and view.sufficient == "Enough price levels")
     assert(view.exclusion:find("excluded: 1", 1, true) and view.exclusion:find("Suspicious retained", 1, true))
     assert(f.scanner.state == "DONE" and not f:has("UI must not analyze again"))
 end)
@@ -526,9 +558,9 @@ test("dashboard renders all maturity stages and withholds premature window metri
     assert(f.panel.rows[2447].columns.maturity.text == "30d ready" and f.panel.rows[2447].columns.percentile.text == "50")
     assert(f.panel.historyValues.median7.text == "Needs history")
     f.panel.selectedItemID = 2447; f.panel:Update()
-    assert(f.panel.historyValues.median30.text == "0g 2s 0c" and f.panel.historyValues.observations.text == "4 / 30d ready")
+    assert(f.panel.historyValues.median30.text == coins(nil, 2, 0) and f.panel.historyValues.observations.text == "4 / 30d ready")
     f.now = f.now + 120; f.panel:Update(); assert(f.panel.historyValues.lastScan.text == "2m ago")
-    assert(f.view.ReferenceMoney(199.5) == "199.5c")
+    assert(f.view.ReferenceMoney(199.5) == coins(nil, 1, 99.5))
     assert(f.view.PValue(0.00000001) == "p<0.0001" and f.view.PValue(0.031) == "p=0.0310")
     assert(f.view.PValue(nil) == "Needs history")
 end)
@@ -560,7 +592,7 @@ test("history survives reload fixture, dedupes refresh and caches pure analytics
     assert(#f.mp.market.db:History(2770) == 1 and f.mp.market:Get(2770).lastScan == f.now)
     local g = fixture(function(g) g.env.MarketPilotDB = f.env.MarketPilotDB end)
     g:event("ADDON_LOADED", "MarketPilot"); g:open()
-    assert(g.panel.view.cleanMedian == "0g 2s 0c" and #g.mp.market.db:History(2770) == 1 and #g.sent == 0)
+    assert(g.panel.view.cleanMedian == coins(nil, 2, 0) and #g.mp.market.db:History(2770) == 1 and #g.sent == 0)
     assert(g.mp.market.db.key == f.mp.market.db.key)
     g.mp.HistoricalAnalytics.Analyze = function() error("uncached analysis") end
     g.panel:Update(); g.panel.toggle:Click(); g.panel.toggle:Click(); g.panel.reportButton:Click()
@@ -576,7 +608,7 @@ test("unknown identity and future schema preserve saved data while current scans
         end)
         f:open(); f.panel.scan:Click(); f:complete()
         assert(f.env.MarketPilotDB == root and root.future == "keep me" and root.markets == nil)
-        assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.mp.market.db.status == "UNKNOWN")
+        assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and f.mp.market.db.status == "UNKNOWN")
         assert(f.panel.historyStatus.text:find("History unavailable", 1, true))
         assert(f.panel.historyValues.median7.text == "Needs history")
     end
@@ -623,8 +655,8 @@ test("watch opens stored detail without an AH frame or any AH API call", functio
     local panel, parent = f.panel.frame, f.env.UIParent
     assert(f.env.AuctionHouseFrame == nil and not f.scanner.ahOpen and f.panel.mode == "STANDALONE")
     assert(panel:IsVisible() and panel.parent == parent and panel.point[1] == "CENTER" and panel.point[2] == parent)
-    assert(f.panel.view.state == "READ ONLY" and f.panel.view.cleanMedian == "0g 1s 0c")
-    assert(f.panel.historyValues.median30.text == "0g 2s 0c" and f.panel.historyValues.observations.text == "4 / 30d ready")
+    assert(f.panel.view.state == "READ ONLY" and f.panel.view.cleanMedian == coins(nil, 1, 0))
+    assert(f.panel.historyValues.median30.text == coins(nil, 2, 0) and f.panel.historyValues.observations.text == "4 / 30d ready")
     assert(f.ahCalls == 0 and #f.sent == 0)
 end)
 
@@ -646,7 +678,7 @@ test("standalone item selection changes stored detail without query or history m
     local itemID = f.scanner.itemID
     f:select(2447)
     assert(f.panel.selectedItemID == 2447 and f.scanner.itemID == itemID and f.scanner.state == "IDLE")
-    assert(f.panel.view.cleanMedian == "0g 0s 27c" and f.panel.rows[2447].selection.shown)
+    assert(f.panel.view.cleanMedian == coins(nil, nil, 27) and f.panel.rows[2447].selection.shown)
     f:select(2318)
     assert(f.panel.view.cleanMedian == "No price data" and f.panel.view.quantity == "Not available")
     assert(f.panel.view.message:find("No stored observation", 1, true))
@@ -714,14 +746,14 @@ test("reload fixture reads stored history outside AH without rescanning", functi
     local reloaded = watchFixture(function(f) f.env.MarketPilotDB = clone(saved) end)
     assert(reloaded.panel.frame == nil)
     reloaded:watch(); reloaded:select(2447)
-    assert(reloaded.panel.view.cleanMedian == "0g 0s 27c" and reloaded.ahCalls == 0)
+    assert(reloaded.panel.view.cleanMedian == coins(nil, nil, 27) and reloaded.ahCalls == 0)
     same(reloaded.env.MarketPilotDB, saved)
 end)
 
 test("different same-realm/faction character reads bank-alt partition without AH", function()
     local f = watchFixture(); f:watch()
     assert(f.env.UnitName("player") ~= f.bankName and f.mp.market.db.key == f.bankKey)
-    assert(#f.mp.market.db:History(2770) == 4 and f.panel.rows[2770].columns.now.text == "1s0c")
+    assert(#f.mp.market.db:History(2770) == 4 and f.panel.rows[2770].columns.now.text == coins(nil, 1, 0))
     assert(f.ahCalls == 0)
 end)
 
@@ -732,7 +764,7 @@ test("login retries unavailable early identity without requiring AH or changing 
     assert(f.panel.historyStatus.text:find("realm/faction", 1, true))
     f.env.GetRealmName = function() return "Fixture Realm" end
     f:event("PLAYER_LOGIN")
-    assert(f.mp.market.db.key == f.bankKey and f.panel.view.cleanMedian == "0g 1s 0c")
+    assert(f.mp.market.db.key == f.bankKey and f.panel.view.cleanMedian == coins(nil, 1, 0))
     same(f.env.MarketPilotDB, before); assert(f.ahCalls == 0)
 end)
 
@@ -754,7 +786,7 @@ test("successful early identity A rebinds to persisted stable identity B at logi
         f.env.GetRealmName = function() return "Fixture Realm" end
     end)
     assert(f.mp.market.db.key == f.bankKey, "successful early key must not override stable identity")
-    assert(f.panel.rows[2770].columns.now.text == "1s0c" and f.panel.view.cleanMedian == "0g 1s 0c")
+    assert(f.panel.rows[2770].columns.now.text == coins(nil, 1, 0) and f.panel.view.cleanMedian == coins(nil, 1, 0))
     assert(f.mp.market:Get(2770).current.t == f.mp.market.db:History(2770)[4].t)
     assert(f.env.MarketPilotDB == root and f.ahCalls == 0 and #f.sent == 0)
     same(root, before)
@@ -777,7 +809,7 @@ test("entering-world rebind clears partition-local overlays without deleting eit
     f:event("PLAYER_ENTERING_WORLD")
     assert(market.db.key == f.bankKey and market.cache ~= oldCache and market.db.root == root)
     assert(next(market.latest) == nil and next(market.errors) == nil and next(market.scanTimes) == nil)
-    assert(market:Get(2770).current.cleanMedian == 100 and f.panel.rows[2770].columns.now.text == "1s0c")
+    assert(market:Get(2770).current.cleanMedian == 100 and f.panel.rows[2770].columns.now.text == coins(nil, 1, 0))
     assert(market.lastSample == sample)
     market:Record({ state = "DONE", itemID = 2770, sample = sample })
     same(root, before); assert(f.ahCalls == 0 and #f.sent == 0)
@@ -1042,7 +1074,7 @@ test("category paging is bounded, retains selection, and never starts a query", 
                     local prior = row.text.point[4] + row.text.width
                     for _, key in ipairs({ "now", "change", "trend", "percentile", "supply", "maturity" }) do
                         local col = row.columns[key]
-                        assert(col.point[4] >= prior and col.point[4] + col.width <= 426)
+                        assert(col.point[4] >= prior and row.point[4] + col.point[4] + col.width <= f.panel.frame.width)
                         prior = col.point[4] + col.width
                     end
                 end
@@ -1066,7 +1098,7 @@ test("current/history tabs and report are reachable without a catalogue-length s
     assert(f.panel.scrollLimit < 500) -- bounded summary + raw tables, independent of catalogue size
     f.panel.historyButton:Click()
     assert(f.panel.historicalDetails:IsVisible() and not f.panel.currentDetails:IsVisible())
-    assert(f.panel.historyValues.median30.text == "0g 2s 0c")
+    assert(f.panel.historyValues.median30.text == coins(nil, 2, 0))
     f.panel.reportButton:Click()
     assert(f.panel.reportText:IsVisible() and not f.panel.catalogue:IsVisible() and not f.panel.detail:IsVisible())
     assert(f.panel.reportButton.text == "Market Watch" and f.panel.scroll:GetVerticalScroll() == 0)
@@ -1236,7 +1268,7 @@ test("only standalone watch header drags and saves a center offset without touch
     local history = clone(f.env.MarketPilotDB.markets)
     local panel = f.panel
     assert(panel.frame.movable and panel.titleBar.parent == panel.frame)
-    assert(panel.titleBar.dragButtons[1] == "LeftButton" and panel.titleBar.width <= 440 + panel.toggle.point[4] - panel.toggle.width)
+    assert(panel.titleBar.dragButtons[1] == "LeftButton" and panel.titleBar.width <= panel.frame.width + panel.toggle.point[4] - panel.toggle.width)
     assert(not panel.frame.scripts.OnDragStart and not panel.body.scripts.OnDragStart and not panel.scan.scripts.OnDragStart)
     panel.titleBar.scripts.OnDragStart(panel.titleBar)
     assert(panel.dragging and panel.frame.moving)
@@ -1599,7 +1631,7 @@ test("post-batch row click serializes one commodity scan and one native browse w
     assert(#f.deadlines == #ids + 1)
     f.ready = false; f:complete(2771)
     assert(f.scanner.state == "DONE" and f.scanner.browse.phase == "WAITING" and f.scanner:IsActive())
-    assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.panel.view.quantity == "472")
+    assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and f.panel.view.quantity == "472")
     assert(#f.mp.market.db:History(2771) == 2 and #f.nativeBrowse == 0 and writes == 1)
     local saved = clone(f.env.MarketPilotDB)
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED") -- An unrelated early event cannot complete a waiting request.
@@ -1699,7 +1731,7 @@ test("one shared deadline cancels throttle-waiting browse while keeping the succ
     f.deadlines[1]()
     assert(f.scanner.state == "DONE" and f.scanner.sample == sample and not f.scanner:IsActive())
     assert(not f.scanner.uncertainQuery and f.scanner.browseError:find("throttle wait timed out", 1, true))
-    assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.panel.scan.enabled)
+    assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and f.panel.scan.enabled)
     assert(f.panel.view.message:find("AH search unavailable", 1, true))
     f.ready = true; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY"); f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
     assert(#f.nativeBrowse == 0 and #f.deadlines == 1); same(f.env.MarketPilotDB, saved)
@@ -1714,14 +1746,14 @@ test("dispatched browse timeout preserves prices but requires AH reopen before a
     assert(f.scanner.browse.phase == "QUERYING" and #f.nativeBrowse == 1 and #f.deadlines == 1)
     f.deadlines[1]()
     assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.uncertainQuery)
-    assert(f.panel.view.cleanMedian == "0g 2s 0c" and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
+    assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
     assert(f.panel.view.message:find("Close and reopen", 1, true))
     f:select(2771, true); f.panel.scan:Click(true); f.panel.batchButton:Click(true)
     f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
     assert(f.scanner.uncertainQuery and #f.sent == 1 and #f.nativeBrowse == 1)
     assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.analysis)
-    assert(f.panel.view.cleanMedian == "0g 2s 0c" and not f.mp.batch.active)
+    assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and not f.mp.batch.active)
     same(f.env.MarketPilotDB, saved)
     f:event("AUCTION_HOUSE_CLOSED"); f:open(); f.panel.scan:Click(); f:complete()
     assert(not f.scanner.uncertainQuery and f.scanner.state == "DONE" and #f.sent == 2 and #f.nativeBrowse == 1)
@@ -1734,7 +1766,7 @@ test("browse dispatch failures retain commodity prices and distinguish safe fail
         f:complete()
         assert(f.scanner.state == "DONE" and f.scanner.analysis and f.scanner.sample and not f.scanner:IsActive())
         assert(f.scanner.browseError == f.browseFailure and (f.scanner.uncertainQuery == true) == uncertain)
-        assert(f.panel.view.cleanMedian == "0g 2s 0c" and #f.mp.market.db:History(2770) == 1)
+        assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and #f.mp.market.db:History(2770) == 1)
         assert(f.panel.scan.enabled == not uncertain and #f.nativeBrowse == 1)
         local saved = clone(f.env.MarketPilotDB)
         if uncertain then
@@ -1758,7 +1790,7 @@ test("missing browse capabilities or unresolved item names keep commodity scans 
         assert(f.scanner.state == "DONE" and not f.scanner.browse and not f.scanner:IsActive())
         assert(f.scanner.browseError and not f.scanner.blockedReason and not f.scanner.uncertainQuery)
         assert(#f.nativeBrowse == 0 and #f.sent == 1 and #f.mp.market.db:History(2770) == 1)
-        assert(f.panel.view.cleanMedian == "0g 2s 0c" and f.panel.view.message:find("AH search unavailable", 1, true))
+        assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and f.panel.view.message:find("AH search unavailable", 1, true))
         assert(f:has("AH browse:") and f.panel.scan.enabled)
         if mode == "name" then assert(f.panel.name.text == "Item #2770 (loading)") end
     end
@@ -1782,7 +1814,7 @@ test("optional browse event registration rejection disables only native navigati
         assert(f.scanner.browseBlockedReason and not f.scanner.blockedReason)
         f:open(); f:select(2770); f:complete()
         assert(f.scanner.state == "DONE" and #f.sent == 1 and #f.preparedBrowse == 0 and #f.nativeBrowse == 0)
-        assert(#f.mp.market.db:History(2770) == 1 and f.panel.view.cleanMedian == "0g 2s 0c")
+        assert(#f.mp.market.db:History(2770) == 1 and f.panel.view.cleanMedian == coins(nil, 2, 0))
         assert(f.panel.view.message:find("AH search unavailable", 1, true) and f.panel.scan.enabled)
     end
 end)
@@ -1819,7 +1851,7 @@ test("unknown browse readiness fails closed while preserving completed prices an
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
     assert(f.scanner.state == "DONE" and not f.scanner:IsActive() and f.scanner.uncertainQuery)
     assert(f.scanner.sample == sample and f.scanner.analysis == analysis and f.scanner.browseError == f.browseReadyError)
-    assert(f.panel.view.cleanMedian == "0g 2s 0c" and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
+    assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and not f.panel.scan.enabled and not f.panel.batchButton.enabled)
     f.env.SlashCmdList.MARKETPILOT("scan"); f.env.SlashCmdList.MARKETPILOT("batch")
     f.browseReadyError = nil; f:event("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f.deadlines[1]()
@@ -1840,7 +1872,7 @@ test("native browse failure only affects dispatched navigation and keeps its com
     f:event("AUCTION_HOUSE_BROWSE_FAILURE")
     assert(f.scanner.state == "DONE" and f.scanner.sample == sample and f.scanner.browseError)
     assert(f.scanner.uncertainQuery and not f.scanner:IsActive() and not f.panel.scan.enabled)
-    assert(f.panel.view.cleanMedian == "0g 2s 0c" and #f.nativeBrowse == 1)
+    assert(f.panel.view.cleanMedian == coins(nil, 2, 0) and #f.nativeBrowse == 1)
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"); f:event("AUCTION_HOUSE_BROWSE_FAILURE"); f.deadlines[1]()
     same(f.env.MarketPilotDB, saved)
     f:event("AUCTION_HOUSE_CLOSED"); f:event("AUCTION_HOUSE_BROWSE_FAILURE")
@@ -1923,7 +1955,7 @@ test("row click wires real AuctionAPI bridge to localized Blizzard search and fu
     assert(table.concat(order, ",") == "category,mode,text,start,send" and nativeCalls[1] == localized)
     assert(f.env.g_auctionHouseFilters.minLevel == 17 and f.env.g_auctionHouseFilters.maxLevel == 43)
     assert(f.env.g_auctionHouseFilters.filters[2] == true and f.env.g_auctionHouseFilters.filters[7] == nil)
-    assert(f.panel.name.text == localized and f.panel.view.cleanMedian == "0g 2s 0c")
+    assert(f.panel.name.text == localized and f.panel.view.cleanMedian == coins(nil, 2, 0))
     local saved = clone(f.env.MarketPilotDB)
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
     assert(f.scanner:IsActive() and fullReads == 0) -- Busy throttle short-circuits cache readiness.
@@ -1942,7 +1974,7 @@ test("summary is visible by default and preserves raw statistics", function()
     f.panel.scan:Click(); f:complete()
     assert(f.panel.summary.text:find("reference price", 1, true))
     assert(f.panel.summary.text:find("472 listed units", 1, true))
-    assert(f.panel.currentDetails:IsVisible() and f.panel.view.cleanMedian == "0g 2s 0c")
+    assert(f.panel.currentDetails:IsVisible() and f.panel.view.cleanMedian == coins(nil, 2, 0))
     assert(f.panel.view.quantity == "472" and f.panel.view.levels == "2")
     f.panel.historyButton:Click()
     assert(f.panel.summaryTitle.text == "Historical Context" and f.panel.historicalDetails:IsVisible())
@@ -1956,13 +1988,13 @@ end)
 
 test("summary selection uses only the selected item and never starts a standalone query", function()
     local f = watchFixture(); f:watch()
-    assert(f.panel.summary.text:find("1s0c", 1, true))
+    assert(f.panel.summary.text:find(coins(nil, 1, 0), 1, true))
     f:select(2447)
-    assert(f.panel.summary.text:find("27c", 1, true))
-    assert(not f.panel.summary.text:find("1s0c", 1, true))
+    assert(f.panel.summary.text:find(coins(nil, nil, 27), 1, true))
+    assert(not f.panel.summary.text:find(coins(nil, 1, 0), 1, true))
     f:select(2318)
     assert(f.panel.summary.text:find("No scan recorded for this item.", 1, true))
-    assert(not f.panel.summary.text:find("27c", 1, true))
+    assert(not f.panel.summary.text:find(coins(nil, nil, 27), 1, true))
     assert(f.ahCalls == 0 and #f.sent == 0 and f.scanner.state == "IDLE")
 end)
 
@@ -2003,21 +2035,21 @@ test("failed refresh keeps previous summary explicitly dated", function()
     f.panel.scan:Click(); f:complete()
     assert(f.scanner.state == "ERROR")
     assert(f.panel.summary.text:find("previous", 1, true))
-    assert(f.panel.summary.text:find("1s0c", 1, true))
+    assert(f.panel.summary.text:find(coins(nil, 1, 0), 1, true))
     assert(f.panel.summary.text:find("2 minutes ago", 1, true))
     same(f.env.MarketPilotDB, before)
     f:event("AUCTION_HOUSE_CLOSED")
     assert(f.panel.summary.text:find("latest update reported an error", 1, true))
     assert(f.panel.summary.text:find("2 minutes ago", 1, true))
     f:select(2447)
-    assert(f.panel.summary.text:find("27c", 1, true))
+    assert(f.panel.summary.text:find(coins(nil, nil, 27), 1, true))
     assert(not f.panel.summary.text:find("previous", 1, true))
 end)
 
 test("wrapped summaries stay above raw tables at all supported scales", function()
     local f = watchFixture(); f:watch()
     f.panel.summary.GetStringHeight = function(widget)
-        assert(widget.wordWrap and widget.width == 412)
+        assert(widget.wordWrap and widget.width == f.panel.frame.width - 28)
         return widget.text == f.panel.insight.current and 280 or 340
     end
     for _, scale in ipairs({ 0.8, 0.9, 1, 1.1, 1.2 }) do

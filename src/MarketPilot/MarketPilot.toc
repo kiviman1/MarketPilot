@@ -2,7 +2,7 @@
 ## Title: MarketPilot
 ## Notes: Gathering market analysis, price history, and trends for Mining, Herbalism, and Skinning.
 ## Author: Kivanc / MarketPilot
-## Version: 0.5.8
+## Version: 0.5.9
 ## IconTexture: Interface\AddOns\MarketPilot\Media\Icon.tga
 ## SavedVariables: MarketPilotDB
 

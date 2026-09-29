@@ -198,7 +198,14 @@ on open. Its children inherit the dialog layer. Settings uses DIALOG level 200 s
 it stays above Watch regardless of open order. A guarded fixed-frame-level option
 prevents parent propagation where available. No foreign HUD frame is changed and
 there is no per-frame raise loop; ordinary game tooltips remain on their own layer.
-MP-05 uses a 440 x 650 frame with native mouse-wheel scrolling; no Up/Down buttons.
+Watch uses a 490 x 650 frame with native mouse-wheel scrolling; no Up/Down buttons.
+Money is rendered with the client's Gold/Silver/Copper MoneyFrame textures in
+Watch, Current, History and summary text. A shared pure formatter omits leading
+zero denominations, retains lower zeros, and preserves fractional copper in
+historical medians. Unknown prices still use their existing missing-data labels.
+The Now column reserves 115 units for the three coins; the selected details show
+the full price, including unusually large amounts. No price values or storage
+formats change. Native texture appearance/font fit remain client visual checks.
 Collapse leaves a 42-high header. No Blizzard child hooks or framework. Missing
 anchor/render failures hide the panel and print diagnostics.
 

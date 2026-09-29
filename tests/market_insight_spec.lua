@@ -23,8 +23,17 @@ local function copy(value)
     if type(value) ~= "table" then return value end
     local result = {}; for key, entry in pairs(value) do result[key] = copy(entry) end; return result
 end
-local function contains(text, expected) assert(text:find(expected, 1, true), expected .. " absent from:\n" .. text) end
-local function absent(text, forbidden) assert(not text:find(forbidden, 1, true), forbidden .. " present in:\n" .. text) end
+-- Keep sentence-rule assertions readable independently of presentation markup.
+-- Only the exact known native coin tags are normalized; malformed tags still fail.
+-- Dedicated money/UI tests assert the actual unmodified markup.
+local function plainMoney(text)
+    for kind, suffix in pairs({ Gold = "g", Silver = "s", Copper = "c" }) do
+        text = text:gsub("|TInterface\\MoneyFrame\\UI%-" .. kind .. "Icon:12:12:0:0|t", suffix)
+    end
+    return (text:gsub("(%d[gs]) (%d)", "%1%2"))
+end
+local function contains(text, expected) assert(plainMoney(text):find(expected, 1, true), expected .. " absent from:\n" .. text) end
+local function absent(text, forbidden) assert(not plainMoney(text):find(forbidden, 1, true), forbidden .. " present in:\n" .. text) end
 local function context() return { itemID = 2770, scannerItemID = 2770, scannerState = "DONE", now = 100120 } end
 local function fixture()
     return { current = { t = 100000, rawMedian = 27, cleanMedian = 27, q1 = 20, q3 = 28, lowest = 18,
@@ -54,7 +63,7 @@ end
 
 test("CURRENT_REFERENCE_BELOW", function()
     local text, insight = build()
-    contains(text.current, "reference price is 27c, with a central price band of 20c-28c.")
+    contains(text.current, "reference price is 27c, with a central price band of 20c - 28c.")
     contains(text.current, "The lowest listed price is 18c, about 33.3% below that reference.")
     contains(text.current, "This scan covers 3,145 listed units.")
     contains(text.current, "4 unusual price levels were retained; no price levels were excluded.")

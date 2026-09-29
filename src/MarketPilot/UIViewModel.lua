@@ -7,11 +7,30 @@ local function integer(value, minimum)
         and value <= 9007199254740991 and value % 1 == 0
 end
 
-function View.Money(value)
-    if not integer(value, 1) then return "No price data" end
+local COINS = {
+    gold = "|TInterface\\MoneyFrame\\UI-GoldIcon:12:12:0:0|t",
+    silver = "|TInterface\\MoneyFrame\\UI-SilverIcon:12:12:0:0|t",
+    copper = "|TInterface\\MoneyFrame\\UI-CopperIcon:12:12:0:0|t",
+}
+
+-- Native inline textures keep this a pure presentation function. Omit only
+-- leading zero denominations; lower zeros and every copper remain visible.
+local function coinMoney(value)
     local remainder = value % 10000
     local copper = remainder % 100
-    return string.format("%.0fg %.0fs %.0fc", (value - remainder) / 10000, (remainder - copper) / 100, copper)
+    local gold, silver = (value - remainder) / 10000, (remainder - copper) / 100
+    local parts = {}
+    if gold > 0 then parts[#parts + 1] = string.format("%.0f", gold) .. COINS.gold end
+    if gold > 0 or silver > 0 then parts[#parts + 1] = string.format("%.0f", silver) .. COINS.silver end
+    -- Historical medians can contain half a copper. Do not turn them into an
+    -- integer price or round to silver for display.
+    parts[#parts + 1] = (copper % 1 == 0 and string.format("%.0f", copper) or tostring(copper)) .. COINS.copper
+    return table.concat(parts, " ")
+end
+
+function View.Money(value)
+    if not integer(value, 1) then return "No price data" end
+    return coinMoney(value)
 end
 
 local function count(value)
@@ -75,12 +94,8 @@ function View.PValue(value)
     return value < 0.0001 and "p<0.0001" or string.format("p=%.4f", value)
 end
 function View.ReferenceMoney(value)
-    if not MP.HistoryMath.Finite(value) or value <= 0 then return "Needs history" end
-    return value % 1 == 0 and View.Money(value) or string.format("%.1fc", value)
-end
-
-local function shortMoney(value)
-    return View.Money(value):gsub("^0g ", ""):gsub("^0s ", ""):gsub(" ", "")
+    if not MP.HistoryMath.Finite(value) or value <= 0 or value > 9007199254740991 then return "Needs history" end
+    return coinMoney(value)
 end
 local function groupedCount(value)
     local text = string.format("%.0f", value)
@@ -110,14 +125,14 @@ local function insightSentence(message)
         SCAN_TIME_UNAVAILABLE = "Recorded scan age is unavailable.",
     }
     if fixed[c] then return fixed[c] end
-    if c == "REFERENCE_BAND" then return "The latest recorded scan's reference price is " .. shortMoney(message.price)
-        .. ", with a central price band of " .. shortMoney(message.q1) .. "-" .. shortMoney(message.q3) .. "." end
-    if c == "REFERENCE" then return "The latest recorded scan's reference price is " .. shortMoney(message.price) .. "." end
-    if c == "BAND" then return "The latest recorded scan's central price band is " .. shortMoney(message.q1) .. "-" .. shortMoney(message.q3) .. "." end
-    if c == "LOWEST_BELOW" then return "The lowest listed price is " .. shortMoney(message.price)
+    if c == "REFERENCE_BAND" then return "The latest recorded scan's reference price is " .. View.Money(message.price)
+        .. ", with a central price band of " .. View.Money(message.q1) .. " - " .. View.Money(message.q3) .. "." end
+    if c == "REFERENCE" then return "The latest recorded scan's reference price is " .. View.Money(message.price) .. "." end
+    if c == "BAND" then return "The latest recorded scan's central price band is " .. View.Money(message.q1) .. " - " .. View.Money(message.q3) .. "." end
+    if c == "LOWEST_BELOW" then return "The lowest listed price is " .. View.Money(message.price)
         .. (math.abs(message.change) < 0.1 and ", " or ", about ") .. magnitude(message.change) .. " below that reference." end
-    if c == "LOWEST_EQUAL" then return "The lowest listed price is " .. shortMoney(message.price) .. ", equal to that reference." end
-    if c == "LOWEST" then return "The lowest recorded listed price is " .. shortMoney(message.price) .. "." end
+    if c == "LOWEST_EQUAL" then return "The lowest listed price is " .. View.Money(message.price) .. ", equal to that reference." end
+    if c == "LOWEST" then return "The lowest recorded listed price is " .. View.Money(message.price) .. "." end
     if c == "QUANTITY" then return "This scan covers " .. groupedCount(message.count) .. (message.count == 1 and " listed unit." or " listed units.") end
     if c == "ANOMALY_COUNTS" then
         local retained = message.suspicious == 0 and "No unusual price levels were retained" or (groupedCount(message.suspicious)
@@ -181,7 +196,7 @@ function View.Watch(data)
     local current, a, signal = data.current, data.analytics, data.signals
     local now = "No scan"
     if current then
-        now = integer(current.cleanMedian, 1) and View.Money(current.cleanMedian):gsub("^0g ", ""):gsub("^0s ", ""):gsub(" ", "") or "No price"
+        now = integer(current.cleanMedian, 1) and View.Money(current.cleanMedian) or "No price"
     end
     local window = a.windows[7]
     local change = window and window.change

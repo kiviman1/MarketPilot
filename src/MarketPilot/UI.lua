@@ -3,7 +3,7 @@ local UI = {}
 UI.__index = UI
 MP.UI = UI
 
-local WIDTH, HEIGHT = 440, 650
+local WIDTH, HEIGHT = 490, 650
 local PAGE_SIZE = 6
 local WINDOW_LEVEL = 100 -- Normal dialog layer; Settings uses a separate level above this tree.
 local FIELDS = {
@@ -19,8 +19,8 @@ local HISTORY_FIELDS = {
     { "Return volatility", "volatility" }, { "Supply / 7d", "supply" }, { "Significance", "significance" },
     { "Last scan", "lastScan" }, { "Observations", "observations" },
 }
-local COLUMNS = { { "Now", "now", 155, 65 }, { "7d", "change", 220, 43 }, { "Trend", "trend", 265, 30 },
-    { "30d %", "percentile", 296, 35 }, { "Supply", "supply", 333, 40 }, { "Maturity", "maturity", 375, 62 } }
+local COLUMNS = { { "Now", "now", 155, 115 }, { "7d", "change", 270, 43 }, { "Trend", "trend", 315, 30 },
+    { "30d %", "percentile", 346, 35 }, { "Supply", "supply", 383, 40 }, { "Maturity", "maturity", 425, 51 } }
 
 function UI.New(scanner, items, report, market, batch, clock)
     return setmetatable({ scanner = scanner, items = items, report = report,
@@ -230,22 +230,23 @@ function UI:Create(anchor)
         b:SetScript("OnClick", function() self:Guard(action) end)
         return b
     end
-    self.batchButton = button("Scan Gathering Markets", self.body, 14, -2, 218, self.StartBatch)
-    self.cancelButton = button("Cancel", self.body, 237, -2, 76, self.CancelBatch)
-    self.reportButton = button("Market Report", self.body, 318, -2, 110, self.ToggleReport)
+    self.batchButton = button("Scan Gathering Markets", self.body, 14, -2, WIDTH - 222, self.StartBatch)
+    self.cancelButton = button("Cancel", self.body, WIDTH - 203, -2, 76, self.CancelBatch)
+    self.reportButton = button("Market Report", self.body, WIDTH - 122, -2, 110, self.ToggleReport)
     self.progress = label(self.body, "", 14, -30, WIDTH - 28)
     self.historyStatus = label(self.body, "", 14, -50, WIDTH - 28)
-    self.historyStatus:SetWidth(326)
-    self.settingsButton = button("Settings", self.body, 346, -45, 80, function(s)
+    self.historyStatus:SetWidth(WIDTH - 114)
+    self.settingsButton = button("Settings", self.body, WIDTH - 94, -45, 80, function(s)
         if s.onSettings then s.onSettings() end
     end)
     self.catalogue = CreateFrame("Frame", nil, self.body)
     self.catalogue:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -72)
     self.catalogue:SetSize(WIDTH, 218)
     self.categoryButtons = {}
+    local categoryWidth = (WIDTH - 40) / 4
     for index, name in ipairs({ "All", "Mining", "Herbalism", "Skinning" }) do
         local category = name
-        self.categoryButtons[name] = button(name, self.catalogue, 14 + (index - 1) * 104, 0, 100,
+        self.categoryButtons[name] = button(name, self.catalogue, 14 + (index - 1) * (categoryWidth + 4), 0, categoryWidth,
             function(s) s:SetCategory(category) end)
     end
     label(self.catalogue, "Item", 14, -31, 138)
@@ -286,7 +287,7 @@ function UI:Create(anchor)
     self.name:SetHeight(30)
     self.currentButton = button("Current", self.detail, 14, -37, 96, function(s) s:Detail("CURRENT") end)
     self.historyButton = button("History", self.detail, 114, -37, 96, function(s) s:Detail("HISTORY") end)
-    self.scan = button("Scan", self.detail, 216, -37, 210, self.Scan)
+    self.scan = button("Scan", self.detail, 216, -37, WIDTH - 230, self.Scan)
     self.summaryTitle = label(self.detail, "Market Summary", 14, -72, WIDTH - 28, "GameFontNormal")
     self.summary = label(self.detail, "", 14, -93, WIDTH - 28)
     self.summary:SetWordWrap(true)
