@@ -392,3 +392,23 @@ Missing capability/event support leaves regular
 commodity scanning available. The completed commodity sample is saved once;
 browse results never become market-history observations. No retail/client-version
 compatibility is inferred from the source mirror.
+
+## 0.5.7 native Search button parity
+
+CONFIRMED by the user's 0.5.6 screenshots: selecting Gold Ore transfers the name
+to native Browse Auctions, but the programmatic path shows "No items found".
+Pressing the native Search button with that same text returns Gold Ore and Gold
+Power Core. This does not isolate whether the forced ExactMatch filter, nil level
+bounds, or another server-side difference caused the custom request to be empty;
+ExactMatch semantics in this Forever client remain UNKNOWN.
+
+The source-backed correction calls `AuctionHouseFrame.SearchBar:StartSearch()`
+after the existing category clear, Buy display switch, and name fill. This is the
+same method called by `AuctionHouseSearchButtonMixin:OnClick()` in the pinned
+Forever `Blizzard_AuctionHouseSearchBar.lua`. Native code obtains current level
+bounds and filters; MarketPilot no longer constructs a separate filter/level
+request or requires the ExactMatch enum. There are no button-click proxies,
+alternate query signatures, retries, or saved-filter mutations by MarketPilot.
+
+The new programmatic path still needs the Gold Ore in-client recheck. The manual
+button observation is not a confirmation that 0.5.7 has already passed that test.

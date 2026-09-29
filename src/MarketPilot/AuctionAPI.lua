@@ -78,17 +78,19 @@ local function browseUI()
         return nil, "UNKNOWN: Blizzard browse sorting is not loaded"
     end
     local mode = type(AuctionHouseFrameDisplayMode) == "table" and AuctionHouseFrameDisplayMode.Buy
-    local exact = type(Enum) == "table" and type(Enum.AuctionHouseFilter) == "table"
-        and Enum.AuctionHouseFilter.ExactMatch
-    if type(mode) ~= "table" or not integer(exact, 0) then
-        return nil, "UNKNOWN: Blizzard browse mode or ExactMatch filter is unavailable"
+    if type(mode) ~= "table" then
+        return nil, "UNKNOWN: Blizzard browse mode is unavailable"
+    end
+    local searchBar = frame.SearchBar
+    if (type(searchBar) ~= "table" and type(searchBar) ~= "userdata") or type(searchBar.StartSearch) ~= "function" then
+        return nil, "UNKNOWN: Blizzard Search button path is unavailable"
     end
     local ok, categories = pcall(frame.GetCategoriesList, frame)
     if not ok or (type(categories) ~= "table" and type(categories) ~= "userdata")
         or type(categories.SetSelectedCategory) ~= "function" then
         return nil, "UNKNOWN: Blizzard browse categories are unavailable"
     end
-    return { frame = frame, categories = categories, mode = mode, exact = exact }
+    return { frame = frame, categories = categories, mode = mode, searchBar = searchBar }
 end
 
 function AuctionAPI:PrepareBrowse(itemID)
@@ -114,20 +116,18 @@ function AuctionAPI:QueryBrowse(name)
     local ready, readyReason = self:IsReady()
     if ready ~= true then return false, readyReason or "Blizzard browse is not ready", false end
     -- Source-backed Forever 1.60.1 (70009), wow-ui-source bd2470a:
-    -- Frame:SetSearchText/SendBrowseQuery, CategoriesList:SetSelectedCategory,
-    -- and Enum.AuctionHouseFilter.ExactMatch. Live behavior still needs testing.
+    -- SearchBar:StartSearch is the native Search button's own entry point.
     -- Buy must be shown before setting text: SearchBar:OnShow clears its text.
-    -- Clearing the category and supplying only ExactMatch avoids stale filters;
-    -- Blizzard's saved filter preferences are left intact.
+    -- Leave filter/level construction to Blizzard, just as a manual search does.
+    -- The previous forced exact-name query differed from the working live button.
     local prepared, preparationError = pcall(function()
         ui.categories:SetSelectedCategory(nil)
         ui.frame:SetDisplayMode(ui.mode)
         if ui.frame:SetSearchText(name) ~= true then error("Blizzard rejected browse search text") end
     end)
     if not prepared then return false, "UNKNOWN: browse preparation failed: " .. tostring(preparationError), false end
-    -- This high-level method owns native query state, sorting, headers and the
-    -- Browse Auctions display. Exactly one dispatch; never open a buy dialog.
-    local sent, result = pcall(ui.frame.SendBrowseQuery, ui.frame, name, nil, nil, { ui.exact })
+    -- One native search; do not try alternative parameters or retry empty results.
+    local sent, result = pcall(ui.searchBar.StartSearch, ui.searchBar)
     if not sent then return false, "UNKNOWN: Blizzard browse failed: " .. tostring(result), true end
     if result == false then return false, "UNKNOWN: Blizzard browse returned false", true end
     -- Like commodity search, successful dispatch is not a completed result.

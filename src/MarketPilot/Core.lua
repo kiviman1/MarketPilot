@@ -1,5 +1,5 @@
 local _, MP = ...
-local VERSION = "0.5.6"
+local VERSION = "0.5.7"
 local debugEnabled = false
 
 local function debug(message)

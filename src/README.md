@@ -263,18 +263,21 @@ On the development host these also run under Python's installed `lupa.lua51`
 bundled with the addon. History tests use only a pure Lua environment; UI/batch
 fixtures mock native frames and events. They do not prove rendered beta behavior.
 
-## In-game acceptance for 0.5.6
+## In-game acceptance for 0.5.7
 
 The release archive is built explicitly with `python tools/package.py`.
 CI validates the source manifest without producing a ZIP. The archive contains
 only the `MarketPilot/` runtime folder; SavedVariables remain in the client.
 This checklist records in-client checks separately from offline test coverage.
 
-For 0.5.6, finish a gathering batch, then click Firebloom in Market Watch. Its
+For 0.5.7, finish a gathering batch, then click Gold Ore in Market Watch. Its
 commodity analysis should refresh, followed by a native Browse Auctions search
-with Firebloom in the search box and matching results on the left. Repeat for
-Copper Ore and Light Leather, including from an unrelated AH category or tab.
-Native browse uses an exact-name request without the prior category/level filters.
+with Gold Ore in the search box and matching results on the left, without another
+manual Search click. Compare with pressing Search: both paths must use the same
+native search/filter semantics (including other name matches such as Gold Power
+Core). Repeat for Firebloom, Copper Ore and Light Leather, including from an
+unrelated AH category or tab. The category is cleared; current native filter and
+level settings are respected rather than replaced with a forced exact match.
 An item with no listings should show Blizzard's empty result rather than an old row.
 Click repeatedly while scanning/opening search: only one commodity request and
 one subsequent browse request should occur. Refresh and batch must not navigate

@@ -1,13 +1,13 @@
 -- Source-backed native browse adapter fixtures; live Forever validation is separate.
 local function fixture()
-    local f = { calls = {}, sent = 0, readyCalls = 0, completeCalls = 0, ready = true,
+    local f = { calls = {}, sent = 0, startCalls = 0, readyCalls = 0, completeCalls = 0, ready = true,
         complete = true, shown = true, known = true }
     local env = setmetatable({}, { __index = _G })
     env._G = env
     local mp = { Items = {
-        Contains = function(id) return id == 4625 end,
+        Contains = function(id) return id == 4625 or id == 2776 end,
         Metadata = function(id)
-            assert(id == 4625)
+            assert(id == 4625 or id == 2776)
             return { known = f.known, name = f.name or "Feuerblüte" }
         end,
     } }
@@ -39,9 +39,17 @@ local function fixture()
     function frame:SendBrowseQuery(name, minLevel, maxLevel, filters)
         f.calls[#f.calls + 1] = "browse"
         assert(self.mode == buy and self.text == name and categories.selected == nil)
-        assert(minLevel == nil and maxLevel == nil)
-        assert(#filters == 1 and filters[1] == env.Enum.AuctionHouseFilter.ExactMatch)
-        env.C_AuctionHouse.SendBrowseQuery({ searchString = name, filters = filters })
+        assert(minLevel == env.g_auctionHouseFilters.minLevel and maxLevel == env.g_auctionHouseFilters.maxLevel)
+        env.C_AuctionHouse.SendBrowseQuery({ searchString = name, minLevel = minLevel, maxLevel = maxLevel, filters = filters })
+    end
+    frame.SearchBar = {}
+    function frame.SearchBar:StartSearch(...)
+        assert(self == frame.SearchBar and select("#", ...) == 0, "use the native Search action without custom arguments")
+        f.startCalls = f.startCalls + 1; f.calls[#f.calls + 1] = "start"
+        local saved, filters = env.g_auctionHouseFilters, {}
+        for filter, selected in pairs(saved.filters) do if selected then filters[#filters + 1] = filter end end
+        table.sort(filters)
+        frame:SendBrowseQuery(frame.text, saved.minLevel, saved.maxLevel, filters)
     end
     env.C_AuctionHouse = {
         IsThrottledMessageSystemReady = function()
@@ -80,14 +88,15 @@ test("prepare resolves localized configured name without UI changes or query", f
     assert(f.sent == 0 and f.readyCalls == 0)
 end)
 
-test("one exact native browse switches category then mode then text before dispatch", function()
+test("native Search action switches category then mode then text before one dispatch", function()
     local f = fixture()
     assert(f.api:QueryBrowse(assert(f.api:PrepareBrowse(4625)).name))
-    assert(table.concat(f.calls, ",") == "category,mode,text,browse")
-    assert(f.sent == 1 and f.readyCalls == 1 and f.query.searchString == "Feuerblüte")
-    -- Requested query ignores old filters but never overwrites player preferences.
+    assert(table.concat(f.calls, ",") == "category,mode,text,start,browse")
+    assert(f.sent == 1 and f.startCalls == 1 and f.readyCalls == 1 and f.query.searchString == "Feuerblüte")
+    -- Native Search owns current filters and level inputs; the adapter does not override them.
     local filters = f.env.g_auctionHouseFilters
     assert(filters.minLevel == 40 and filters.maxLevel == 50 and filters.filters[2] == true)
+    assert(f.query.minLevel == 40 and f.query.maxLevel == 50 and #f.query.filters == 1 and f.query.filters[1] == 2)
 end)
 
 test("unknown or unconfigured item never invents a browse name", function()
@@ -146,13 +155,12 @@ test("malformed native frame or category return cannot escape the API boundary",
     end
 end)
 
-test("requires runtime exact-match symbol and buy mode without numeric fallback", function()
+test("native Search works without ExactMatch enum but still requires the native buy mode", function()
     local f = fixture()
-    f.env.Enum.AuctionHouseFilter.ExactMatch = nil
-    assert(f.api:PrepareBrowse(4625) == nil)
-    f.env.Enum.AuctionHouseFilter.ExactMatch = "5"
-    assert(f.api:PrepareBrowse(4625) == nil)
-    f.env.Enum.AuctionHouseFilter.ExactMatch = 8
+    f.env.Enum = nil
+    assert(f.api:QueryBrowse(assert(f.api:PrepareBrowse(4625)).name))
+    assert(f.sent == 1 and f.startCalls == 1 and #f.query.filters == 1 and f.query.filters[1] == 2)
+    f = fixture()
     f.env.AuctionHouseFrameDisplayMode.Buy = nil
     assert(f.api:PrepareBrowse(4625) == nil)
     f.env.AuctionHouseFrameDisplayMode.Buy = { "BrowseResultsFrame" }
@@ -226,7 +234,7 @@ test("dispatch revalidates AH and capability after preparation", function()
     f.shown = false
     assert(not f.api:QueryBrowse(request.name))
     f.shown = true
-    f.frame.SendBrowseQuery = nil
+    f.frame.SearchBar.StartSearch = nil
     assert(not f.api:QueryBrowse(request.name))
     assert(f.sent == 0 and #f.calls == 0)
 end)
@@ -289,12 +297,61 @@ test("native send failure is ambiguous and never automatically retried", functio
     assert(f.sent == 1)
 end)
 
-test("explicit false native send is ambiguous", function()
+test("explicit false native StartSearch is ambiguous without direct browse fallback", function()
     local f = fixture()
-    f.frame.SendBrowseQuery = function() f.sent = f.sent + 1; return false end
+    f.frame.SearchBar.StartSearch = function(self, ...)
+        assert(self == f.frame.SearchBar and select("#", ...) == 0)
+        f.startCalls = f.startCalls + 1; return false
+    end
     local ok, reason, uncertain = f.api:QueryBrowse("Firebloom")
     assert(not ok and uncertain == true and reason:find("returned false", 1, true))
-    assert(f.sent == 1)
+    assert(f.sent == 0 and f.startCalls == 1)
+end)
+
+test("programmatic Gold Ore search matches the normal Search action including native levels and filters", function()
+    for _, selected in ipairs({ {}, { [2] = true }, { [2] = true, [5] = true } }) do
+        local f = fixture(); f.name = "Gold Ore"
+        f.env.g_auctionHouseFilters.filters = selected
+        f.env.g_auctionHouseFilters.minLevel, f.env.g_auctionHouseFilters.maxLevel = 17, 43
+        assert(f.api:QueryBrowse(assert(f.api:PrepareBrowse(2776)).name))
+        local programmatic = f.query
+        assert(f.sent == 1 and f.startCalls == 1 and programmatic.searchString == "Gold Ore")
+        assert(programmatic.minLevel == 17 and programmatic.maxLevel == 43)
+        f.frame.SearchBar:StartSearch() -- Same native action as the user's Search button.
+        local manual = f.query
+        assert(f.sent == 2 and f.startCalls == 2 and manual.searchString == programmatic.searchString)
+        assert(manual.minLevel == programmatic.minLevel and manual.maxLevel == programmatic.maxLevel)
+        assert(#manual.filters == #programmatic.filters)
+        for index, filter in ipairs(manual.filters) do
+            assert(filter == programmatic.filters[index] and selected[filter] == true)
+        end
+        assert(f.env.g_auctionHouseFilters.filters == selected)
+        if not selected[5] then for _, filter in ipairs(programmatic.filters) do assert(filter ~= 5) end end
+    end
+end)
+
+test("missing malformed or unsupported SearchBar rejects before changing native UI", function()
+    for _, bad in ipairs({ false, 1, "SearchBar", {}, { StartSearch = true } }) do
+        local f = fixture(); f.frame.SearchBar = bad
+        local request, reason = f.api:PrepareBrowse(4625)
+        assert(request == nil and type(reason) == "string")
+        local ok, _, uncertain = f.api:QueryBrowse("Firebloom")
+        assert(not ok and uncertain == false and f.sent == 0 and f.startCalls == 0 and #f.calls == 0)
+    end
+    local f = fixture(); f.frame.SearchBar = nil
+    assert(f.api:PrepareBrowse(4625) == nil)
+    assert(not f.api:QueryBrowse("Firebloom") and f.sent == 0 and #f.calls == 0)
+end)
+
+test("StartSearch exception never triggers a fallback query or auto retry", function()
+    local f = fixture()
+    f.frame.SearchBar.StartSearch = function(self, ...)
+        assert(self == f.frame.SearchBar and select("#", ...) == 0)
+        f.startCalls = f.startCalls + 1; error("native Search action failed")
+    end
+    local ok, reason, uncertain = f.api:QueryBrowse("Firebloom")
+    assert(not ok and uncertain == true and reason:find("Search action failed", 1, true))
+    assert(f.startCalls == 1 and f.sent == 0)
 end)
 
 test("browse adapter has no click proxy, deep frame access, or purchase action", function()
@@ -302,7 +359,7 @@ test("browse adapter has no click proxy, deep frame access, or purchase action",
     local source = file:read("*a")
     file:close()
     for _, forbidden in ipairs({ "SearchBox", "FilterButton", ":Click(", "SelectBrowseResult",
-        "StartCommoditiesPurchase", "StartItemPurchase", "hooksecurefunc", "OnUpdate" }) do
+        "StartCommoditiesPurchase", "StartItemPurchase", "hooksecurefunc", "OnUpdate", "Enum.AuctionHouseFilter.ExactMatch" }) do
         assert(not source:find(forbidden, 1, true), forbidden)
     end
 end)

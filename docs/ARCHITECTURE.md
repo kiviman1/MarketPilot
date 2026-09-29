@@ -176,8 +176,11 @@ Known zero counts remain zero; unknown prices remain absent internally.
 AH parent remains top-level `AuctionHouseFrame`, anchor `TOPLEFT -> TOPRIGHT`, `(8,0)`.
 An explicit item-row click also requests native Browse Auctions navigation.
 Scanner completes and records the commodity sample first, then waits for throttle
-readiness before AuctionAPI invokes the source-backed native exact-name browse
-path. This optional browse phase participates in `IsActive` and shares the scan's
+readiness before AuctionAPI invokes Blizzard SearchBar's `StartSearch` method,
+the same path as its Search button. Blizzard supplies the current level/filter
+parameters; MarketPilot adds no exact-match filter. The selected category is
+cleared before switching to Browse and filling the client-owned item name.
+This optional browse phase participates in `IsActive` and shares the scan's
 one deadline; repeated clicks, batch starts, and manual refreshes cannot dispatch
 alongside it. Browse completion requires the optional `AUCTION_HOUSE_BROWSE_RESULTS_UPDATED`
 event plus throttle readiness and `HasFullBrowseResults() == true`. The event has

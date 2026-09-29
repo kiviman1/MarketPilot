@@ -1873,8 +1873,9 @@ test("row click wires real AuctionAPI bridge to localized Blizzard search and fu
         end
         local frame = g.env.AuctionHouseFrame
         local buyMode = {}; g.env.AuctionHouseFrameDisplayMode = { Buy = buyMode }
-        g.env.Enum = { AuctionHouseFilter = { ExactMatch = 7 } }
+        g.env.Enum = nil -- Native Search owns its filter choices; this bridge needs no enum lookup.
         g.env.g_auctionHouseSortsBySearchContext = {}
+        g.env.g_auctionHouseFilters = { minLevel = 17, maxLevel = 43, filters = { [2] = true } }
         frame.GetCategoriesList = function(self)
             assert(self == frame)
             return { SetSelectedCategory = function(_, category) assert(category == nil); order[#order + 1] = "category" end }
@@ -1888,9 +1889,17 @@ test("row click wires real AuctionAPI bridge to localized Blizzard search and fu
         end
         frame.SendBrowseQuery = function(self, name, minimum, maximum, filters)
             assert(self == frame and self.searchText == localized and name == localized)
-            assert(minimum == nil and maximum == nil and #filters == 1 and filters[1] == 7)
+            assert(minimum == 17 and maximum == 43 and #filters == 1 and filters[1] == 2)
             order[#order + 1] = "send"; nativeCalls[#nativeCalls + 1] = name
             g.ready, g.browseFull = false, false
+        end
+        frame.SearchBar = {}
+        frame.SearchBar.StartSearch = function(self, ...)
+            assert(self == frame.SearchBar and select("#", ...) == 0)
+            order[#order + 1] = "start"
+            local saved, filters = g.env.g_auctionHouseFilters, {}
+            for filter, enabled in pairs(saved.filters) do if enabled then filters[#filters + 1] = filter end end
+            frame:SendBrowseQuery(frame.searchText, saved.minLevel, saved.maxLevel, filters)
         end
         g.env.C_AuctionHouse.SendBrowseQuery = function() error("dispatch must stay owned by the native frame") end
         g.env.C_AuctionHouse.HasFullBrowseResults = function(...)
@@ -1901,7 +1910,9 @@ test("row click wires real AuctionAPI bridge to localized Blizzard search and fu
     assert(f.scanner.state == "QUERYING" and #nativeCalls == 0 and #f.sent == 1)
     f:complete()
     assert(f.scanner.state == "DONE" and f.scanner.browse.phase == "QUERYING" and #nativeCalls == 1)
-    assert(table.concat(order, ",") == "category,mode,text,send" and nativeCalls[1] == localized)
+    assert(table.concat(order, ",") == "category,mode,text,start,send" and nativeCalls[1] == localized)
+    assert(f.env.g_auctionHouseFilters.minLevel == 17 and f.env.g_auctionHouseFilters.maxLevel == 43)
+    assert(f.env.g_auctionHouseFilters.filters[2] == true and f.env.g_auctionHouseFilters.filters[7] == nil)
     assert(f.panel.name.text == localized and f.panel.view.cleanMedian == "0g 2s 0c")
     local saved = clone(f.env.MarketPilotDB)
     f:event("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
