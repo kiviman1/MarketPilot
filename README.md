@@ -19,14 +19,14 @@ The user remains the decision maker; signals are descriptive observations.
 
 Open AH and click **Scan Gathering Markets**. The catalogue covers 56 Classic
 materials in Mining, Herbalism and Skinning. Filter by category, browse six rows
-per page, and use **Current**, **History** or **Market Report** for detail.
+per page, and use **Summary**, **History** or **Market Report** for detail.
 With AH open, clicking a material refreshes its analysis and then opens its
 normal name search in Blizzard's Browse Auctions list, using the same search
 method and current filter/level settings as Blizzard's Search button. The two requests run in
 sequence. Batch scans and the Refresh button do not navigate Blizzard's list.
-**Market Summary** explains the recorded scan in Current; **Historical Context**
+**Market Summary** explains the recorded scan in Summary; **Historical Context**
 explains supported comparisons in History. Both disclose missing data and scan
-age above the existing technical tables. Prices use native gold/silver/copper
+age above the metric cards. Prices use native gold/silver/copper
 icons while preserving exact copper and fractional historical medians.
 Away from AH, click the **minimap icon** or use `/mp watch` for stored history;
 drag its title to move the read-only window. `/mp report` opens the stored report.
@@ -42,6 +42,32 @@ watch to its saved standalone position. No login/background scan starts automati
 
 Runtime demo mode has been removed. Synthetic month-long market scenarios remain
 offline regression fixtures only; the addon always displays real observations.
+
+The redesigned terminal uses dark surfaces, gold active tabs, a selected-row
+accent, category counts and a four-column metric grid. Market Report has four
+separate cards and a maturity distribution bar. The **30d %** column remains a
+price percentile, not a price-change percentage; its heading has an explanatory
+tooltip. Long summaries, metric values and report entries expand vertically.
+The viewport fits the available screen height; the mouse wheel reaches all content.
+
+## Development testing
+
+Keep the CurseForge-managed `MarketPilot/` installation intact. Generate a
+development copy from this same source with:
+
+```powershell
+python tools/package.py --dev-dir "C:\Program Files (x86)\World of Warcraft\_classic_beta_\Interface\AddOns\MarketPilotDev"
+```
+
+This creates `MarketPilotDev.toc`, the **MarketPilot Dev** title, `/mpdev`
+commands, a distinct named minimap button, dev asset paths and account-wide
+`MarketPilotDevDB`. Release history/settings are never copied or migrated.
+Dev initially has its own empty history. Enable only the dev addon while testing
+AH scans to avoid overlapping panels or simultaneous requests. A newly installed
+addon folder may require returning to character selection or restarting the client.
+Use `/mpdev watch` and `/mpdev settings` for the independent windows.
+The dev option creates no ZIP. Ordinary release packaging keeps the original
+`MarketPilot` identity and excludes dev-only files. Build releases only when requested.
 
 Missing values use plain labels: **No scan**, **No price**, **Needs history** and
 **Failed**. A dash in a historical column means more observations are needed.

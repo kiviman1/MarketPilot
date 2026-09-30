@@ -26,6 +26,7 @@ There is no Inventory, Pricing, Sale Assistant or posting module. Probe is uncha
 | Preferences | Versioned optional UI settings; safe defaults, validation and position conversion |
 | MarketInsight | Pure explanation codes and validated parameters from existing Market facts; no analytics rerun |
 | UIViewModel | Presentation: formatting, missing-data labels, watch/detail/report text |
+| UITheme | Native surface/button colors and styles shared by Watch and Settings |
 | UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
 | Settings | Independent UIParent window for display, category, lock, trace and launcher preferences |
 | Minimap | Native click/drag launcher; injected watch/settings callbacks |
@@ -143,6 +144,22 @@ uses Database.Open's preserveHistory option: validate/bind without pruning eithe
 partition. Reads return detached whitelist copies.
 
 ## Dashboard and report
+
+Watch and Report are separate top tabs within the same guarded UI. The six-row
+table keeps the full configured catalogue; Summary/History consume unchanged
+Market descriptors in four-column metric cards. Report cards use the same
+UIViewModel formatter as its detached text representation. The maturity bar
+only renders existing counts; it performs no market classification. Wrapped
+text determines card heights on event-driven updates, and a screen-bounded
+viewport scrolls the content. UITheme is a small native drawing helper, with no
+framework, timers, OnUpdate, scanner or storage access. Settings remains independent.
+
+`tools/package.py --dev-dir <.../MarketPilotDev>` generates a separate development
+identity from the release manifest. TOC name/title, SavedVariables, named launcher,
+asset paths, event addon-name guard and slash commands are all isolated. Runtime
+modules still share only their own addon namespace. The dev generator never
+reads/copies release data or creates a release ZIP. Offline tests load both
+generated dev and release sources together, including a dev scan/reload round trip.
 
 Runtime demo mode was removed in 0.5.3. The deterministic month-long market
 generator now lives only in `tests/fixtures/SyntheticMarket.lua`; it is not in the

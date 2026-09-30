@@ -94,7 +94,10 @@ local function fixture(configure)
         function w:Enable() self.enabled = true end
         function w:Disable() self.enabled = false end
         function w:EnableMouse(value) self.mouse = value end
-        function w:SetText(value) self.text = value end
+        function w:SetText(value) self.text = value; if self.caption then self.caption.text = value end end
+        function w:SetFontString(value) self.caption = value end
+        function w:IsEnabled() return self.enabled end
+        function w:SetTextColor(...) self.textColor = { ... } end
         function w:GetStringHeight()
             -- Conservative deterministic font stub; actual font metrics are a
             -- client check. A 12px coin occupies about two 7px characters,
@@ -134,10 +137,10 @@ local function fixture(configure)
         return w
     end
     env.CreateFrame = function(kind, name, parent, template)
-        assert(name == nil or name == "MarketPilotMinimapButton", "only the discoverable launcher needs a global name")
+        assert(name == nil or name == "MarketPilotMinimapButton" or name == "MarketPilotDevMinimapButton", "only the discoverable launcher needs a global name")
         local frame = widget(kind, parent)
         frame.name = name
-        if name then env[name] = frame end
+        if name then assert(rawget(env, name) == nil, "named frame collision"); env[name] = frame end
         frame.template = template
         return frame
     end
@@ -365,7 +368,7 @@ test("collapse and expand only affect our frame, including reopen", function()
     local count = #f.objects
     local height = f.panel.frame.height
     f.panel.toggle:Click()
-    assert(f.panel.frame.height == 42 and not f.panel.body.shown and f.panel.toggle.text == "+")
+    assert(f.panel.frame.height == 52 and not f.panel.body.shown and f.panel.toggle.text == "+")
     assert(f.env.AuctionHouseFrame.shown and #f.sent == 0)
     f:event("AUCTION_HOUSE_CLOSED"); f:open()
     assert(f.panel.collapsed and not f.panel.body.shown)
@@ -449,7 +452,7 @@ test("market dashboard replaces the old placeholder with batch and report action
         assert(w.text ~= "Sale Assistant" and w.text ~= "Coming in MP-04")
     end
     assert(f.panel.batchButton.text == "Scan Gathering Markets" and f.panel.reportButton.text == "Market Report")
-    assert(#f.sent == 0 and f.panel.frame.height == 650)
+    assert(#f.sent == 0 and f.panel.frame.height == 760)
 end)
 
 test("batch serializes all configured queries and persists progress without raw rows", function()
@@ -1070,7 +1073,7 @@ test("category paging is bounded, retains selection, and never starts a query", 
             for id, row in pairs(f.panel.rows) do
                 if row:IsVisible() then
                     visible = visible + 1; assert(categorySet[id] and not visited[id]); visited[id] = true
-                    assert(row.point[5] <= -51 and row.point[5] - row.height >= -188)
+                    assert(row.point[5] <= -76 and row.point[5] - row.height >= -292)
                     local prior = row.text.point[4] + row.text.width
                     for _, key in ipairs({ "now", "change", "trend", "percentile", "supply", "maturity" }) do
                         local col = row.columns[key]
@@ -1094,14 +1097,14 @@ end)
 test("current/history tabs and report are reachable without a catalogue-length scroll", function()
     local f = watchFixture(); f:watch()
     assert(f.panel.frame.clamped and f.panel.currentDetails:IsVisible() and not f.panel.historicalDetails:IsVisible())
-    assert(f.panel.detail.point[5] == -302 and f.panel.summaryTitle:IsVisible())
-    assert(f.panel.scrollLimit < 500) -- bounded summary + raw tables, independent of catalogue size
+    assert(f.panel.detail.point[5] == -498 and f.panel.summaryTitle:IsVisible())
+    assert(f.panel.scrollLimit < 700) -- bounded summary + raw tables, independent of catalogue size
     f.panel.historyButton:Click()
     assert(f.panel.historicalDetails:IsVisible() and not f.panel.currentDetails:IsVisible())
     assert(f.panel.historyValues.median30.text == coins(nil, 2, 0))
     f.panel.reportButton:Click()
     assert(f.panel.reportText:IsVisible() and not f.panel.catalogue:IsVisible() and not f.panel.detail:IsVisible())
-    assert(f.panel.reportButton.text == "Market Watch" and f.panel.scroll:GetVerticalScroll() == 0)
+    assert(f.panel.reportButton.text == "Market Report" and f.panel.reportButton.active and f.panel.scroll:GetVerticalScroll() == 0)
     f.panel.reportButton:Click()
     assert(f.panel.catalogue:IsVisible() and f.panel.historicalDetails:IsVisible())
     f.panel.closeButton:Click()
@@ -1147,7 +1150,7 @@ end)
 
 test("report and wrapped recovery guidance fit the reachable scroll content", function()
     local f = watchFixture(); f:watch()
-    assert(f.panel.message.wordWrap and f.panel.exclusion.wordWrap and f.panel.message.height == 54)
+    assert(f.panel.message.wordWrap and f.panel.exclusion.wordWrap and f.panel.message.height >= 64)
     assert(not f.panel.rows[2770].text.wordWrap)
     local messageBottom = -f.panel.detail.point[5] - f.panel.currentDetails.point[5]
         - f.panel.message.point[5] + f.panel.message.height
@@ -2080,5 +2083,113 @@ test("summary switches to empty observation after successful empty refresh", fun
     assert(not f.panel.summary.text:find("previous", 1, true))
     assert(f.panel.view.cleanMedian == "No price data" and f.panel.view.quantity == "0")
 end)
+
+test("modern views expose actual catalogue counts and separate report cards", function()
+    local f = watchFixture(); f:watch()
+    assert(f.panel.watchButton.text == "Market Watch" and f.panel.watchButton.active)
+    assert(f.panel.categoryButtons.All.text == "All  56")
+    assert(f.panel.categoryButtons.Mining.text == "Mining  14")
+    assert(f.panel.categoryButtons.Herbalism.text == "Herbalism  31")
+    assert(f.panel.categoryButtons.Skinning.text == "Skinning  11")
+    -- Header fonts belong to the header surface, so a child frame cannot cover them.
+    for _, widget in ipairs(f.objects) do
+        if widget.kind == "FontString" and widget.text == "ITEM" then
+            assert(widget.parent ~= f.panel.catalogue and widget.parent.parent == f.panel.catalogue)
+        end
+    end
+    assert(f.panel.metricTiles[1].point[4] < f.panel.metricTiles[2].point[4])
+    assert(f.panel.metricTiles[5].point[5] < f.panel.metricTiles[1].point[5])
+    local saved = clone(f.env.MarketPilotDB)
+    f.panel.reportButton:Click()
+    assert(f.panel.reportButton.active and not f.panel.watchButton.active)
+    assert(#f.panel.reportCards == 4 and f.panel.reportCards[1]:IsVisible())
+    assert(f.panel.reportCards[1].point[5] == f.panel.reportCards[2].point[5])
+    assert(f.panel.reportCards[3].point[5] < f.panel.reportCards[1].point[5])
+    assert(f.panel.reportCards[2].body.text:find("30d percentile", 1, true))
+    local totalWidth = 0
+    for _, segment in ipairs(f.panel.maturityBar) do
+        if segment:IsShown() then totalWidth = totalWidth + segment.width end
+    end
+    assert(math.abs(totalWidth - (f.panel.frame.width - 60)) < 0.0001)
+    f.panel.watchButton:Click()
+    assert(not f.panel.reportMode and f.panel.catalogue:IsVisible())
+    same(f.env.MarketPilotDB, saved); assert(f.ahCalls == 0)
+end)
+
+test("long exact money and report names expand cards without overlapping", function()
+    local f = watchFixture(); f:watch()
+    f.panel.values.range.GetStringHeight = function() return 160 end
+    f.panel:Update()
+    assert(f.panel.metricTiles[4].height >= 205)
+    assert(-f.panel.metricTiles[5].point[5] >= f.panel.metricTiles[4].height)
+    f.panel.reportCards[1].body.GetStringHeight = function() return 250 end
+    f.panel.reportButton:Click()
+    assert(f.panel.reportCards[1].height >= 308)
+    assert(-f.panel.reportCards[3].point[5] >= f.panel.reportCards[1].height + 12)
+    assert(-f.panel.maturityCard.point[5] >= -f.panel.reportCards[3].point[5] + f.panel.reportCards[3].height)
+end)
+
+test("small screen bounds viewport while preserving scroll reach and docking", function()
+    local f = watchFixture(); f.env.UIParent:SetHeight(560); f:watch()
+    assert(f.panel.frame.height == 540 and f.panel.scroll.height == 456)
+    f.panel.scroll.scripts.OnMouseWheel(nil, -100)
+    assert(f.panel.scroll:GetVerticalScroll() + f.panel.scroll.height == f.panel.body.height)
+    f.mp.preferences:Set("watchScale", 1.2); f.panel:ApplyPreferences()
+    assert(f.panel.frame.height <= math.floor(560 / 1.2 - 20))
+    assert(-f.panel.detail.point[5] > -f.panel.catalogue.point[5] - f.panel.previous.point[5] + f.panel.previous.height)
+    f.makeAnchor(); f:open()
+    assert(f.panel.mode == "AH" and not f.panel.frame.movable and #f.sent == 0)
+    f.panel.toggle:Click(); assert(f.panel.frame.height == 52)
+    f.panel.toggle:Click(); assert(f.panel.scroll:IsVisible())
+end)
+
+if DEV_SOURCE_ROOT then
+    local function loadDev(f)
+        local mp = {}
+        for _, path in ipairs(files) do
+            setfenv(assert(loadfile(DEV_SOURCE_ROOT .. "/" .. path)), f.env)("MarketPilotDev", mp)
+        end
+        f:event("ADDON_LOADED", "MarketPilotDev")
+        return mp
+    end
+    test("generated dev addon coexists with release globals commands frames and data", function()
+        local f = fixture(function(g)
+            g.env.MarketPilotDB = { schema = 1, markets = {}, releaseMarker = 99 }
+        end)
+        f:event("ADDON_LOADED", "MarketPilot")
+        local release = clone(f.env.MarketPilotDB)
+        local dev = loadDev(f)
+        assert(dev ~= f.mp and dev.market.db.root == f.env.MarketPilotDevDB)
+        assert(dev.market.db.root ~= f.env.MarketPilotDB)
+        assert(f.env.SLASH_MARKETPILOT1 == "/mp" and f.env.SLASH_MARKETPILOTDEV1 == "/mpdev")
+        assert(f.env.MarketPilotMinimapButton ~= f.env.MarketPilotDevMinimapButton)
+        assert(dev.minimap.icon.texture == "Interface\\AddOns\\MarketPilotDev\\Media\\Icon.tga")
+        f.env.SlashCmdList.MARKETPILOTDEV("watch")
+        assert(dev.panel.frame:IsShown() and dev.panel.mode == "STANDALONE" and not f.panel.frame)
+        assert(dev.panel.titleBar.parent == dev.panel.frame and not dev.panel.scan.enabled)
+        f.env.SlashCmdList.MARKETPILOTDEV("settings")
+        assert(dev.settings.frame:IsShown() and not f.mp.settings.frame)
+        dev.preferences:Set("defaultCategory", "Mining")
+        f.env.SlashCmdList.MARKETPILOTDEV("svmark")
+        assert(f.env.MarketPilotDevDB._svCanary == f.now and not f.env.MarketPilotDB._svCanary)
+        same(f.env.MarketPilotDB, release)
+        f:open(); dev.panel:Scan()
+        assert(#f.sent == 1 and dev.scanner.state == "QUERYING" and f.scanner.state == "IDLE")
+        f:complete(dev.scanner.itemID)
+        assert(#dev.market.db:History(2770) == 1 and #f.mp.market.db:History(2770) == 0)
+        same(f.env.MarketPilotDB, release)
+        local saved = clone(f.env.MarketPilotDevDB)
+        local reloaded = fixture(function(g)
+            g.env.MarketPilotDB, g.env.MarketPilotDevDB = clone(release), clone(saved)
+        end)
+        reloaded:event("ADDON_LOADED", "MarketPilot")
+        local again = loadDev(reloaded)
+        reloaded.env.SlashCmdList.MARKETPILOTDEV("watch")
+        assert(again.panel.rows[2770].columns.now.text == coins(nil, 2, 0))
+        assert(again.preferences:Get("defaultCategory") == "Mining")
+        same(reloaded.env.MarketPilotDB, release); same(reloaded.env.MarketPilotDevDB, saved)
+        assert(#reloaded.sent == 0)
+    end)
+end
 
 print("PASS " .. passed .. " UI/batch/watch offline tests (Lua 5.1); real frame rendering remains unverified")

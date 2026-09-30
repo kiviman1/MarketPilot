@@ -3,7 +3,7 @@ local UI = {}
 UI.__index = UI
 MP.UI = UI
 
-local WIDTH, HEIGHT = 490, 650
+local WIDTH, HEIGHT = 660, 760
 local PAGE_SIZE = 6
 local WINDOW_LEVEL = 100 -- Normal dialog layer; Settings uses a separate level above this tree.
 local FIELDS = {
@@ -19,8 +19,12 @@ local HISTORY_FIELDS = {
     { "Return volatility", "volatility" }, { "Supply / 7d", "supply" }, { "Significance", "significance" },
     { "Last scan", "lastScan" }, { "Observations", "observations" },
 }
-local COLUMNS = { { "Now", "now", 155, 115 }, { "7d", "change", 270, 43 }, { "Trend", "trend", 315, 30 },
-    { "30d %", "percentile", 346, 35 }, { "Supply", "supply", 383, 40 }, { "Maturity", "maturity", 425, 51 } }
+local COLUMNS = { { "NOW", "now", 190, 120 }, { "7D", "change", 314, 46 },
+    { "TREND", "trend", 364, 40 }, { "30D %", "percentile", 408, 46 },
+    { "SUPPLY", "supply", 458, 66 }, { "MATURITY", "maturity", 530, 100 } }
+local DETAIL_TOP, ROW_TOP, ROW_HEIGHT = 498, 76, 36
+local Theme = MP.UITheme
+
 
 function UI.New(scanner, items, report, market, batch, clock)
     return setmetatable({ scanner = scanner, items = items, report = report,
@@ -91,12 +95,24 @@ function UI:ApplyPreferences()
     if self.frame then
         self:StopDrag()
         self.frame:SetScale(self.preferences:Get("watchScale"))
+        self:FitViewport()
         self.frame:SetMovable(self.mode == "STANDALONE" and not self.preferences:Get("lockWindows"))
         if self.mode == "STANDALONE" then
             MP.Preferences.ApplyPosition(self.frame, UIParent, self.preferences:Get("watchPosition"))
         end
         self:Update()
     end
+end
+
+function UI:FitViewport()
+    -- Bound the viewport, not its content. Wheel scrolling still reaches every
+    -- card when the game UI scale leaves less vertical screen space.
+    local height, scale = UIParent:GetHeight(), UIParent:GetEffectiveScale() / self.frame:GetEffectiveScale()
+    self.expandedHeight = HEIGHT
+    if type(height) == "number" and height > 0 and scale > 0 then
+        self.expandedHeight = math.max(160, math.min(HEIGHT, math.floor(height * scale - 20)))
+    end
+    self.scroll:SetHeight(self.expandedHeight - 84)
 end
 
 function UI:ToggleWatch()
@@ -177,155 +193,251 @@ local function label(parent, text, x, y, width, font)
     if value.SetWordWrap then value:SetWordWrap(false) end
     value:SetJustifyH("LEFT")
     value:SetText(text)
+    Theme.Color(value, "text")
     return value
 end
 
 function UI:Create(anchor)
     local panel = CreateFrame("Frame", nil, anchor)
     self.frame = panel
-    panel:Hide()
-    self:ApplyWindowLayer()
-    panel:SetSize(WIDTH, HEIGHT)
-    if panel.SetClampedToScreen then panel:SetClampedToScreen(true) end
-    panel:EnableMouse(true)
+    panel:Hide(); self:ApplyWindowLayer(); panel:SetSize(WIDTH, HEIGHT)
+    panel:SetClampedToScreen(true); panel:EnableMouse(true)
     panel:SetScript("OnHide", function() self:Guard(self.StopDrag) end)
-    local background = panel:CreateTexture(nil, "BACKGROUND")
-    background:SetAllPoints(panel)
-    background:SetColorTexture(0.035, 0.045, 0.06, 0.97)
-    local accent = panel:CreateTexture(nil, "BORDER")
-    accent:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
-    accent:SetSize(WIDTH, 2)
-    accent:SetColorTexture(0.65, 0.52, 0.27, 1)
-    -- Only the header starts a standalone drag; all body controls keep their
-    -- own mouse behavior and the AH-docked panel is never movable.
+    Theme.Surface(panel, "canvas")
+    local header = panel:CreateTexture(nil, "BACKGROUND", nil, 1)
+    header:SetPoint("TOPLEFT", panel, "TOPLEFT", 1, -1); header:SetSize(WIDTH - 2, 50)
+    header:SetColorTexture(unpack(Theme.colors.card))
     self.titleBar = CreateFrame("Frame", nil, panel)
-    self.titleBar:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
-    self.titleBar:SetSize(WIDTH - 82, 40)
-    self.titleBar:EnableMouse(true)
-    self.titleBar:RegisterForDrag("LeftButton")
+    self.titleBar:SetPoint("TOPLEFT", panel, "TOPLEFT", 1, -1)
+    self.titleBar:SetSize(WIDTH - 98, 50)
+    Theme.Surface(self.titleBar)
+    self.titleBar:EnableMouse(true); self.titleBar:RegisterForDrag("LeftButton")
     self.titleBar:SetScript("OnDragStart", function() self:Guard(self.StartDrag) end)
     self.titleBar:SetScript("OnDragStop", function() self:Guard(self.StopDrag) end)
-    label(self.titleBar, "MARKETPILOT - MARKET WATCH", 14, -13, WIDTH - 100, "GameFontNormal")
-    self.toggle = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    self.toggle:SetSize(28, 24)
-    self.toggle:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -44, -9)
-    self.toggle:SetScript("OnClick", function() self:Guard(self.Toggle) end)
-    self.closeButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    self.closeButton:SetSize(28, 24)
-    self.closeButton:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -10, -9)
-    self.closeButton:SetText("x")
-    self.closeButton:SetScript("OnClick", function() self:Guard(self.ToggleWatch) end)
-
-    self.scroll = CreateFrame("ScrollFrame", nil, panel)
-    self.scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -42)
-    self.scroll:SetSize(WIDTH, HEIGHT - 74)
-    self.scroll:EnableMouseWheel(true)
-    self.scroll:SetScript("OnMouseWheel", function(_, delta) self:Guard(self.Scroll, -delta * 75) end)
-    self.body = CreateFrame("Frame", nil, self.scroll)
-    self.body:SetSize(WIDTH, HEIGHT)
-    self.scroll:SetScrollChild(self.body)
-    local function button(text, parent, x, y, width, action)
-        local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-        b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y); b:SetSize(width, 24); b:SetText(text)
-        b:SetScript("OnClick", function() self:Guard(action) end)
+    local icon = self.titleBar:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(24, 24); icon:SetPoint("TOPLEFT", self.titleBar, "TOPLEFT", 16, -13)
+    icon:SetTexture("Interface\\AddOns\\MarketPilot\\Media\\Icon.tga")
+    label(self.titleBar, "MarketPilot", 50, -17, WIDTH - 160, "GameFontHighlight")
+    local function button(text, parent, x, y, width, action, height)
+        local b = Theme.Button(parent, text, width, height or 30, function() self:Guard(action) end)
+        b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
         return b
     end
-    self.batchButton = button("Scan Gathering Markets", self.body, 14, -2, WIDTH - 222, self.StartBatch)
-    self.cancelButton = button("Cancel", self.body, WIDTH - 203, -2, 76, self.CancelBatch)
-    self.reportButton = button("Market Report", self.body, WIDTH - 122, -2, 110, self.ToggleReport)
-    self.progress = label(self.body, "", 14, -30, WIDTH - 28)
-    self.historyStatus = label(self.body, "", 14, -50, WIDTH - 28)
-    self.historyStatus:SetWidth(WIDTH - 114)
-    self.settingsButton = button("Settings", self.body, WIDTH - 94, -45, 80, function(s)
+    self.toggle = button("-", panel, WIDTH - 88, -10, 32, self.Toggle)
+    self.closeButton = button("x", panel, WIDTH - 46, -10, 32, self.ToggleWatch)
+    self.scroll = CreateFrame("ScrollFrame", nil, panel)
+    self.scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -52)
+    self.scroll:SetSize(WIDTH, HEIGHT - 84); self.scroll:EnableMouseWheel(true)
+    self.scroll:SetScript("OnMouseWheel", function(_, delta) self:Guard(self.Scroll, -delta * 75) end)
+    self.body = CreateFrame("Frame", nil, self.scroll)
+    self.body:SetSize(WIDTH, HEIGHT); self.scroll:SetScrollChild(self.body)
+    self.batchButton = button("Scan Gathering Markets", self.body, 16, -12, 226, self.StartBatch)
+    self.cancelButton = button("Cancel", self.body, 250, -12, 66, self.CancelBatch)
+    self.settingsButton = button("Settings", self.body, WIDTH - 102, -12, 86, function(s)
         if s.onSettings then s.onSettings() end
     end)
+    self.progress = label(self.body, "", 16, -55, WIDTH - 32)
+    Theme.Color(self.progress, "gold")
+    self.historyStatus = label(self.body, "", 16, -77, WIDTH - 32)
+    Theme.Color(self.historyStatus, "muted")
+    self.watchButton = button("Market Watch", self.body, 16, -105, 145, function(s)
+        s.reportMode = false; s.scroll:SetVerticalScroll(0); s:Update()
+    end, 34)
+    self.reportButton = button("Market Report", self.body, 169, -105, 145, self.ToggleReport, 34)
     self.catalogue = CreateFrame("Frame", nil, self.body)
-    self.catalogue:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -72)
-    self.catalogue:SetSize(WIDTH, 218)
+    self.catalogue:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -154)
+    self.catalogue:SetSize(WIDTH, 326)
     self.categoryButtons = {}
-    local categoryWidth = (WIDTH - 40) / 4
+    local categoryWidth = (WIDTH - 56) / 4
     for index, name in ipairs({ "All", "Mining", "Herbalism", "Skinning" }) do
         local category = name
-        self.categoryButtons[name] = button(name, self.catalogue, 14 + (index - 1) * (categoryWidth + 4), 0, categoryWidth,
+        self.categoryButtons[name] = button(name .. "  " .. #self.items.List(name), self.catalogue,
+            16 + (index - 1) * (categoryWidth + 8), 0, categoryWidth,
             function(s) s:SetCategory(category) end)
     end
-    label(self.catalogue, "Item", 14, -31, 138)
-    for _, col in ipairs(COLUMNS) do label(self.catalogue, col[1], col[3], -31, col[4]) end
-    local y = -51
+    local tableHeader = CreateFrame("Frame", nil, self.catalogue)
+    tableHeader:SetPoint("TOPLEFT", self.catalogue, "TOPLEFT", 16, -46)
+    tableHeader:SetSize(WIDTH - 32, 30); Theme.Surface(tableHeader)
+    Theme.Color(label(tableHeader, "ITEM", 12, -10, 155), "muted")
+    for _, col in ipairs(COLUMNS) do Theme.Color(label(tableHeader, col[1], col[3] - 16, -10, col[4]), "muted") end
+    local percentileHeader = CreateFrame("Frame", nil, self.catalogue)
+    percentileHeader:SetPoint("TOPLEFT", self.catalogue, "TOPLEFT", 408, -46)
+    percentileHeader:SetSize(46, 30); percentileHeader:EnableMouse(true)
+    percentileHeader:SetScript("OnEnter", function()
+        if GameTooltip then
+            GameTooltip:SetOwner(percentileHeader, "ANCHOR_TOP")
+            GameTooltip:SetText("30-day price percentile")
+            GameTooltip:AddLine("Position in recorded prices; not a price-change percentage.", 0.7, 0.8, 0.9, true)
+            GameTooltip:Show()
+        end
+    end)
+    percentileHeader:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
     for _, category in ipairs(self.items.categories) do
         for _, id in ipairs(category.itemIDs) do
             local itemID = id
             local row = CreateFrame("Button", nil, self.catalogue)
-            row:SetSize(WIDTH - 28, 22)
-            row:SetPoint("TOPLEFT", self.catalogue, "TOPLEFT", 14, y)
+            row:SetSize(WIDTH - 32, ROW_HEIGHT)
+            row:SetPoint("TOPLEFT", self.catalogue, "TOPLEFT", 16, -ROW_TOP)
+            Theme.Surface(row, "canvas")
+            row.selection = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+            row.selection:SetAllPoints(row); row.selection:SetColorTexture(unpack(Theme.colors.selected))
+            row.accent = row:CreateTexture(nil, "ARTWORK")
+            row.accent:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0); row.accent:SetSize(3, ROW_HEIGHT)
+            row.accent:SetColorTexture(unpack(Theme.colors.gold))
             row.icon = row:CreateTexture(nil, "ARTWORK")
-            row.icon:SetSize(18, 18)
-            row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
-            row.text = label(row, "", 26, -4, 113)
+            row.icon:SetSize(24, 24); row.icon:SetPoint("LEFT", row, "LEFT", 12, 0)
+            row.text = label(row, "", 44, -12, 125)
             row.columns = {}
-            for _, col in ipairs(COLUMNS) do row.columns[col[2]] = label(row, "-", col[3] - 14, -4, col[4]) end
-            row.selection = row:CreateTexture(nil, "BACKGROUND")
-            row.selection:SetAllPoints(row)
-            row.selection:SetColorTexture(0.2, 0.35, 0.48, 0.65)
+            for _, col in ipairs(COLUMNS) do row.columns[col[2]] = label(row, "-", col[3] - 16, -12, col[4]) end
+            local badge = row:CreateTexture(nil, "BACKGROUND", nil, 2)
+            badge:SetPoint("TOPLEFT", row, "TOPLEFT", 508, -8); badge:SetSize(110, 22)
+            badge:SetColorTexture(unpack(Theme.colors.button))
             row:SetScript("OnClick", function() self:Guard(self.ClickItem, itemID) end)
             self.rows[itemID] = row
         end
     end
-    self.previous = button("<", self.catalogue, 14, -193, 36, function(s) s:Page(-1) end)
-    self.pageLabel = label(self.catalogue, "", 60, -199, 320)
-    self.next = button(">", self.catalogue, WIDTH - 50, -193, 36, function(s) s:Page(1) end)
-    y = -302
+    self.previous = button("<", self.catalogue, 16, -300, 32, function(s) s:Page(-1) end, 26)
+    self.pageLabel = label(self.catalogue, "", 64, -308, WIDTH - 128)
+    self.pageLabel:SetJustifyH("CENTER"); Theme.Color(self.pageLabel, "muted")
+    self.next = button(">", self.catalogue, WIDTH - 48, -300, 32, function(s) s:Page(1) end, 26)
     self.detail = CreateFrame("Frame", nil, self.body)
-    self.detail:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, y)
-    local detailTop = y
+    self.detail:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -DETAIL_TOP)
     self.detail:SetSize(WIDTH, 800)
-    self.reportText = label(self.body, "", 14, -82, WIDTH - 28)
-    if self.reportText.SetWordWrap then self.reportText:SetWordWrap(true) end
-    self.reportText:SetHeight(720); self.reportText:SetJustifyV("TOP"); self.reportText:Hide()
-    y = -3
-    self.name = label(self.detail, "", 14, y, WIDTH - 28, "GameFontNormal")
-    self.name:SetHeight(30)
-    self.currentButton = button("Current", self.detail, 14, -37, 96, function(s) s:Detail("CURRENT") end)
-    self.historyButton = button("History", self.detail, 114, -37, 96, function(s) s:Detail("HISTORY") end)
-    self.scan = button("Scan", self.detail, 216, -37, WIDTH - 230, self.Scan)
-    self.summaryTitle = label(self.detail, "Market Summary", 14, -72, WIDTH - 28, "GameFontNormal")
-    self.summary = label(self.detail, "", 14, -93, WIDTH - 28)
-    self.summary:SetWordWrap(true)
-    self.summary:SetJustifyV("TOP")
+    -- Inset card leaves the same summary width used for wrapping and scroll bounds.
+    Theme.Surface(self.detail)
+    self.detailIcon = self.detail:CreateTexture(nil, "ARTWORK")
+    self.detailIcon:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 28, -16); self.detailIcon:SetSize(28, 28)
+    self.name = label(self.detail, "", 68, -18, 230, "GameFontNormal")
+    Theme.Color(self.name, "gold"); self.name:SetHeight(18)
+    self.detailMaturity = label(self.detail, "", 68, -43, 230)
+    Theme.Color(self.detailMaturity, "muted")
+    self.currentButton = button("Summary", self.detail, WIDTH - 242, -16, 100, function(s) s:Detail("CURRENT") end)
+    self.historyButton = button("History", self.detail, WIDTH - 134, -16, 106, function(s) s:Detail("HISTORY") end)
+    self.scan = button("Scan", self.detail, 28, -58, WIDTH - 56, self.Scan)
+    self.summaryTitle = label(self.detail, "Market Summary", 14, -102, WIDTH - 28, "GameFontNormal")
+    self.summary = label(self.detail, "", 14, -123, WIDTH - 28)
+    self.summary:SetWordWrap(true); self.summary:SetJustifyV("TOP")
     self.currentDetails = CreateFrame("Frame", nil, self.detail)
-    self.currentDetails:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 0, -72)
-    self.currentDetails:SetSize(WIDTH, 300)
     self.historicalDetails = CreateFrame("Frame", nil, self.detail)
-    self.historicalDetails:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 0, -72)
-    self.historicalDetails:SetSize(WIDTH, 300)
-    y = 0
-    for _, field in ipairs(FIELDS) do
-        label(self.currentDetails, field[1], 14, y, 135)
-        self.values[field[2]] = label(self.currentDetails, "Not scanned", 155, y, WIDTH - 169)
-        self.values[field[2]]:SetJustifyH("RIGHT")
-        self.values[field[2]]:SetHeight(20)
-        y = y - 20
+    self.currentDetails:SetSize(WIDTH, 380); self.historicalDetails:SetSize(WIDTH, 380)
+    self.metricTiles, self.historyTiles = {}, {}
+    local function tiles(parent, fields, values, collection)
+        local width = (WIDTH - 28) / 4
+        for index, field in ipairs(fields) do
+            local tile = CreateFrame("Frame", nil, parent)
+            tile:SetPoint("TOPLEFT", parent, "TOPLEFT", 14 + ((index - 1) % 4) * width, -math.floor((index - 1) / 4) * 78)
+            tile:SetSize(width, 78); Theme.Surface(tile)
+            Theme.Color(label(tile, field[1]:upper(), 12, -12, width - 24), "muted")
+            local value = label(tile, "Not available", 12, -33, width - 24)
+            value:SetWordWrap(true); value:SetJustifyV("TOP")
+            values[field[2]], collection[index] = value, tile
+        end
     end
-    y = 0
-    for _, field in ipairs(HISTORY_FIELDS) do
-        label(self.historicalDetails, field[1], 14, y, 135)
-        self.historyValues[field[2]] = label(self.historicalDetails, "Needs history", 155, y, WIDTH - 169)
-        y = y - 20
+    tiles(self.currentDetails, FIELDS, self.values, self.metricTiles)
+    tiles(self.historicalDetails, HISTORY_FIELDS, self.historyValues, self.historyTiles)
+    self.exclusion = label(self.currentDetails, "", 14, -246, WIDTH - 28)
+    self.exclusion:SetHeight(32); self.exclusion:SetWordWrap(true)
+    self.message = label(self.currentDetails, "", 14, -286, WIDTH - 28)
+    self.message:SetHeight(64); self.message:SetWordWrap(true); Theme.Color(self.message, "muted")
+    -- Report is a separate native card view, sharing the existing report model.
+    self.reportText = CreateFrame("Frame", nil, self.body)
+    self.reportText:SetPoint("TOPLEFT", self.body, "TOPLEFT", 16, -154)
+    self.reportText:SetSize(WIDTH - 32, 480); self.reportText:Hide()
+    self.reportCards = {}
+    local cardWidth = (WIDTH - 44) / 2
+    for index, title in ipairs({ "Rising markets", "Below historical range", "Unusual return volatility", "Meaningful changes" }) do
+        local card = CreateFrame("Frame", nil, self.reportText)
+        card:SetPoint("TOPLEFT", self.reportText, "TOPLEFT", ((index - 1) % 2) * (cardWidth + 12), -math.floor((index - 1) / 2) * 154)
+        card:SetSize(cardWidth, 142); Theme.Surface(card)
+        Theme.Color(label(card, title, 14, -16, cardWidth - 28, "GameFontHighlight"), index == 1 and "green" or (index == 2 and "blue" or "gold"))
+        card.body = label(card, "", 14, -42, cardWidth - 28)
+        card.body:SetWordWrap(true); card.body:SetJustifyV("TOP"); Theme.Color(card.body, "muted")
+        self.reportCards[index] = card
     end
-    self.exclusion = label(self.currentDetails, "", 14, -205, WIDTH - 28)
-    self.exclusion:SetHeight(28)
-    if self.exclusion.SetWordWrap then self.exclusion:SetWordWrap(true) end
-    self.message = label(self.currentDetails, "", 14, -237, WIDTH - 28)
-    self.message:SetHeight(54)
-    if self.message.SetWordWrap then self.message:SetWordWrap(true) end
+    self.maturityCard = CreateFrame("Frame", nil, self.reportText)
+    self.maturityCard:SetPoint("TOPLEFT", self.reportText, "TOPLEFT", 0, -308)
+    self.maturityCard:SetSize(WIDTH - 32, 110); Theme.Surface(self.maturityCard)
+    label(self.maturityCard, "Data maturity", 14, -16, WIDTH - 60, "GameFontHighlight")
+    self.maturityBar, self.maturityLabels = {}, {}
+    for index, color in ipairs({ "green", "blue", "gold", "muted" }) do
+        local segment = self.maturityCard:CreateTexture(nil, "ARTWORK")
+        segment:SetColorTexture(unpack(Theme.colors[color])); segment:SetHeight(8)
+        self.maturityBar[index] = segment
+        local text = label(self.maturityCard, "", 14 + (index - 1) * (WIDTH - 60) / 4, -72, (WIDTH - 60) / 4)
+        Theme.Color(text, color); self.maturityLabels[index] = text
+    end
+    self.reportNote = label(self.reportText, "Descriptive observations; p-values are approximate.", 0, -438, WIDTH - 32)
+    Theme.Color(self.reportNote, "muted")
     self.expandedHeight = HEIGHT
-    local contentHeight = -detailTop + 378
-    self.watchContentHeight, self.reportContentHeight = contentHeight, 816
-    self.body:SetHeight(contentHeight)
-    self.scrollLimit = contentHeight - (HEIGHT - 74)
+    self.watchContentHeight, self.reportContentHeight = DETAIL_TOP + 600, 634
+    self.scrollLimit = self.watchContentHeight - (HEIGHT - 84)
     self.footer = CreateFrame("Frame", nil, panel)
     self.footer:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0); self.footer:SetSize(WIDTH, 30)
-    label(self.footer, "^ rising  v falling  = stable  - needs history", 14, -8, WIDTH - 28)
+    Theme.Surface(self.footer)
+    label(self.footer, "|cff52d1a1^ rising|r    |cffff6b76v falling|r    = stable    - needs history", 16, -9, WIDTH - 32)
+end
+
+function UI:LayoutMetrics()
+    local height = 0
+    for _, group in ipairs({ { self.metricTiles, FIELDS, self.values }, { self.historyTiles, HISTORY_FIELDS, self.historyValues } }) do
+        local offset = 0
+        for first = 1, #group[2], 4 do
+            local rowHeight = 78
+            for i = first, math.min(first + 3, #group[2]) do
+                rowHeight = math.max(rowHeight, 45 + math.ceil(group[3][group[2][i][2]]:GetStringHeight()))
+            end
+            for i = first, math.min(first + 3, #group[2]) do
+                local tile = group[1][i]
+                tile:ClearAllPoints()
+                tile:SetPoint("TOPLEFT", tile:GetParent(), "TOPLEFT", 14 + ((i - 1) % 4) * (WIDTH - 28) / 4, -offset)
+                tile:SetHeight(rowHeight)
+            end
+            offset = offset + rowHeight
+        end
+        height = math.max(height, offset)
+    end
+    self.exclusion:ClearAllPoints(); self.exclusion:SetPoint("TOPLEFT", self.currentDetails, "TOPLEFT", 14, -height - 12)
+    self.message:ClearAllPoints(); self.message:SetPoint("TOPLEFT", self.currentDetails, "TOPLEFT", 14, -height - 52)
+    local messageHeight = math.max(64, math.ceil(self.message:GetStringHeight()))
+    self.message:SetHeight(messageHeight)
+    local tableHeight = math.max(380, height + 52 + messageHeight + 14)
+    self.currentDetails:SetHeight(tableHeight); self.historicalDetails:SetHeight(tableHeight)
+    self.detail:SetHeight(self.tableTop + tableHeight)
+    self.watchContentHeight = DETAIL_TOP + self.tableTop + tableHeight + 14
+end
+
+function UI:UpdateReport(report)
+    local cards = MP.UIViewModel.ReportCards(report, self.items)
+    self.reportText.text = MP.UIViewModel.Report(report, self.items) -- Detached readable representation for diagnostics/tests.
+    local offset = 0
+    for first = 1, 4, 2 do
+        local height = 142
+        for index = first, first + 1 do
+            local card = self.reportCards[index]
+            card.body:SetText(cards[index].text)
+            height = math.max(height, 58 + math.ceil(card.body:GetStringHeight()))
+        end
+        for index = first, first + 1 do
+            local card = self.reportCards[index]
+            card:ClearAllPoints(); card:SetPoint("TOPLEFT", self.reportText, "TOPLEFT", ((index - 1) % 2) * (WIDTH - 20) / 2, -offset)
+            card:SetHeight(height)
+        end
+        offset = offset + height + 12
+    end
+    self.maturityCard:ClearAllPoints(); self.maturityCard:SetPoint("TOPLEFT", self.reportText, "TOPLEFT", 0, -offset)
+    local total = 0
+    for _, n in pairs(report.maturity) do total = total + n end
+    local x = 14
+    for index, state in ipairs({ "30D READY", "7D READY", "EARLY", "NEW" }) do
+        local n, segment = report.maturity[state], self.maturityBar[index]
+        local width = total > 0 and (WIDTH - 60) * n / total or 0
+        segment:ClearAllPoints(); segment:SetPoint("TOPLEFT", self.maturityCard, "TOPLEFT", x, -50)
+        segment:SetWidth(math.max(1, width)); segment:SetShown(width > 0); x = x + width
+        self.maturityLabels[index]:SetText(MP.UIViewModel.Maturity(state) .. ": " .. n)
+    end
+    self.reportNote:ClearAllPoints(); self.reportNote:SetPoint("TOPLEFT", self.reportText, "TOPLEFT", 0, -offset - 128)
+    self.reportText:SetHeight(offset + 156)
+    self.reportContentHeight = 154 + offset + 170
 end
 
 function UI:Open()
@@ -347,6 +459,7 @@ function UI:Open()
         self.frame:SetParent(anchor)
         self:ApplyWindowLayer()
         self.frame:SetScale(self.preferences and self.preferences:Get("watchScale") or 1)
+        self:FitViewport()
         self.frame:SetMovable(mode == "STANDALONE" and not (self.preferences and self.preferences:Get("lockWindows")))
         self.frame:ClearAllPoints()
         if mode == "AH" then self.frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 8, 0)
@@ -372,17 +485,24 @@ function UI:UpdateInsight(data, now)
         scannerState = self.scanner.state, now = now,
     }))
     local historical = self.detailMode == "HISTORY"
+    local summaryTop = self:IsReadOnly() and 85 or 123
+    self.scan:SetShown(not self:IsReadOnly())
+    self.summaryTitle:ClearAllPoints()
+    self.summaryTitle:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 14, -summaryTop + 21)
+    self.summary:ClearAllPoints()
+    self.summary:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 14, -summaryTop)
     self.summaryTitle:SetText(historical and "Historical Context" or "Market Summary")
     self.summary:SetText(historical and self.insight.history or self.insight.current)
     -- Measure the wrapped font at the existing local width. Scaling the window
     -- scales text and frames together; no timer or per-frame layout is needed.
-    local tableTop = 93 + math.ceil(self.summary:GetStringHeight()) + 14
+    local tableTop = summaryTop + math.ceil(self.summary:GetStringHeight()) + 14
+    self.tableTop = tableTop
     for _, details in ipairs({ self.currentDetails, self.historicalDetails }) do
         details:ClearAllPoints()
         details:SetPoint("TOPLEFT", self.detail, "TOPLEFT", 0, -tableTop)
     end
-    self.detail:SetHeight(tableTop + 306)
-    self.watchContentHeight = 302 + tableTop + 306
+    self.detail:SetHeight(tableTop + 380)
+    self.watchContentHeight = DETAIL_TOP + tableTop + 394
 end
 
 function UI:Close()
@@ -396,7 +516,7 @@ function UI:Update()
     if not self.frame or not self.anchor then return end
     if not self.scanner.ahOpen and not readOnly then self:Close(); return end
     local view = self.view
-    self.frame:SetHeight(self.collapsed and 42 or self.expandedHeight)
+    self.frame:SetHeight(self.collapsed and 52 or self.expandedHeight)
     self.toggle:SetText(self.collapsed and "+" or "-")
     if self.collapsed then self.body:Hide(); self.scroll:Hide(); self.footer:Hide()
     else self.body:Show(); self.scroll:Show(); self.footer:Show() end
@@ -417,17 +537,16 @@ function UI:Update()
     end
     if data.error and not self.scanner.uncertainQuery then view.message = MP.UIViewModel.Error(data.error) end
     if self.reportMode then self.detail:Hide(); self.catalogue:Hide(); self.reportText:Show()
-        self.reportText:SetText(MP.UIViewModel.Report(self.market:Report(), self.items))
+        self:UpdateReport(self.market:Report())
     else self.reportText:Hide(); self.detail:Show(); self.catalogue:Show() end
-    local contentHeight = self.reportMode and self.reportContentHeight or self.watchContentHeight
-    self.body:SetHeight(contentHeight)
-    self.scrollLimit = math.max(0, contentHeight - (HEIGHT - 74))
-    self.scroll:SetVerticalScroll(math.min(self.scroll:GetVerticalScroll(), self.scrollLimit))
-    self.reportButton:SetText(self.reportMode and "Market Watch" or "Market Report")
+    Theme.Paint(self.reportButton, self.reportMode == true)
+    Theme.Paint(self.watchButton, not self.reportMode)
     if self.detailMode == "HISTORY" then self.historicalDetails:Show(); self.currentDetails:Hide()
     else self.historicalDetails:Hide(); self.currentDetails:Show() end
     if self.detailMode == "HISTORY" then self.historyButton:Disable(); self.currentButton:Enable()
     else self.currentButton:Disable(); self.historyButton:Enable() end
+    Theme.Paint(self.historyButton, self.detailMode == "HISTORY")
+    Theme.Paint(self.currentButton, self.detailMode ~= "HISTORY")
     local history = MP.UIViewModel.History(data, now)
     history.changes = history.change7 .. " / " .. history.change30
     for key, widget in pairs(self.historyValues) do widget:SetText(history[key]) end
@@ -440,11 +559,14 @@ function UI:Update()
         or self.scanner.blockedReason then self.batchButton:Disable() else self.batchButton:Enable() end
     if not self:IsReadOnly() and self.batch.active then self.cancelButton:Enable() else self.cancelButton:Disable() end
     self.name:SetText(view.name)
+    self.detailMaturity:SetText(MP.UIViewModel.Maturity(data.analytics.maturity))
+    self.detailIcon:SetTexture(view.icon)
     for _, field in ipairs(FIELDS) do
         self.values[field[2]]:SetText(field[2] == "state" and MP.UIViewModel.State(view.state) or view[field[2]])
     end
     self.message:SetText(view.message)
     self.exclusion:SetText(view.exclusion)
+    self:LayoutMetrics()
     self.scan:SetText(view.buttonText)
     if view.scanEnabled and not self.batch.active then self.scan:Enable() else self.scan:Disable() end
     local list, visible = self.items.List(self.category), {}
@@ -454,11 +576,12 @@ function UI:Update()
         local id = list[(self.page - 1) * PAGE_SIZE + i]
         if id then visible[id] = i end
     end
-    self.pageLabel:SetText(string.format("%s | %d items | %d / %d", self.category, #list, self.page, pages))
+    self.pageLabel:SetText(string.format("%d-%d of %d items | %s | page %d/%d", (self.page - 1) * PAGE_SIZE + 1, math.min(self.page * PAGE_SIZE, #list), #list, self.category, self.page, pages))
     if self.page == 1 then self.previous:Disable() else self.previous:Enable() end
     if self.page == pages then self.next:Disable() else self.next:Enable() end
     for name, widget in pairs(self.categoryButtons) do
         if name == self.category then widget:Disable() else widget:Enable() end
+        Theme.Paint(widget, name == self.category)
     end
     for itemID, row in pairs(self.rows) do
         local info = self.items.Metadata(itemID)
@@ -467,13 +590,19 @@ function UI:Update()
         local watch = MP.UIViewModel.Watch(self.market:Get(itemID))
         for key, widget in pairs(row.columns) do widget:SetText(watch[key]) end
         if itemID == view.itemID then row.selection:Show() else row.selection:Hide() end
+        if itemID == view.itemID then row.accent:Show() else row.accent:Hide() end
         if view.itemsEnabled or self.batch.active then row:Enable() else row:Disable() end
         if visible[itemID] then
             row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", self.catalogue, "TOPLEFT", 14, -51 - (visible[itemID] - 1) * 23)
+            row:SetPoint("TOPLEFT", self.catalogue, "TOPLEFT", 16, -ROW_TOP - (visible[itemID] - 1) * ROW_HEIGHT)
             row:Show()
         else row:Hide() end
     end
+    local contentHeight = self.reportMode and self.reportContentHeight or self.watchContentHeight
+    self.body:SetHeight(contentHeight)
+    self.scrollLimit = math.max(0, contentHeight - self.scroll:GetHeight())
+    self.scroll:SetVerticalScroll(math.min(self.scroll:GetVerticalScroll(), self.scrollLimit))
+
 end
 
 function UI:MetadataReceived(itemID, success)

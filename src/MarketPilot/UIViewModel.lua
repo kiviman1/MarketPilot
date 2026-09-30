@@ -228,12 +228,12 @@ function View.History(data, now)
     values.signal = signalSummary(data.signals)
     return values
 end
-function View.Report(report, items)
-    local lines = { "MARKET REPORT" }
+function View.ReportCards(report, items)
+    local cards = {}
     local sections = { { "Rising markets", "rising" }, { "Below historical range", "cheap" },
         { "Unusual return volatility", "volatile" }, { "Meaningful changes", "significant" } }
     for _, section in ipairs(sections) do
-        lines[#lines + 1] = "\n" .. section[1]
+        local lines = {}
         if #report[section[2]] == 0 then lines[#lines + 1] = "No supported observations" end
         for i, row in ipairs(report[section[2]]) do
             if i > 4 then break end
@@ -245,6 +245,14 @@ function View.Report(report, items)
         end
         local remaining = #report[section[2]] - 4
         if remaining > 0 then lines[#lines + 1] = "+ " .. remaining .. " more; browse Market Watch" end
+        cards[#cards + 1] = { title = section[1], text = table.concat(lines, "\n") }
+    end
+    return cards
+end
+function View.Report(report, items)
+    local lines = { "MARKET REPORT" }
+    for _, card in ipairs(View.ReportCards(report, items)) do
+        lines[#lines + 1] = "\n" .. card.title .. "\n" .. card.text
     end
     lines[#lines + 1] = "\nData maturity"
     for _, state in ipairs({ "NEW", "EARLY", "7D READY", "30D READY" }) do lines[#lines + 1] = View.Maturity(state) .. ": " .. report.maturity[state] end

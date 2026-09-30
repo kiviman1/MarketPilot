@@ -4,6 +4,7 @@ Settings.__index = Settings
 MP.Settings = Settings
 local SCALES = { 0.8, 0.9, 1, 1.1, 1.2 }
 local CATEGORIES = { "All", "Mining", "Herbalism", "Skinning" }
+local Theme = MP.UITheme
 local WINDOW_LEVEL = 200 -- Above Market Watch and its child controls, within the normal dialog layer.
 
 function Settings.New(preferences, callbacks, report)
@@ -61,13 +62,12 @@ end
 local function label(parent, text, x, y, width, font)
     local value = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
     value:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    value:SetWidth(width); value:SetJustifyH("LEFT"); value:SetText(text)
+    value:SetWidth(width); value:SetJustifyH("LEFT"); value:SetText(text); Theme.Color(value, "text")
     return value
 end
 local function button(parent, text, x, y, width, callback)
-    local widget = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    widget:SetSize(width, 25); widget:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    widget:SetText(text); widget:SetScript("OnClick", callback)
+    local widget = Theme.Button(parent, text, width, 25, callback)
+    widget:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     return widget
 end
 local function checkbox(parent, text, y, callback)
@@ -84,8 +84,7 @@ function Settings:Create()
     panel:Hide(); panel:SetSize(330, 325); panel:EnableMouse(true); panel:SetMovable(true)
     self:ApplyWindowLayer()
     MP.Preferences.ApplyPosition(panel, UIParent, self.preferences:Get("settingsPosition"))
-    local background = panel:CreateTexture(nil, "BACKGROUND")
-    background:SetAllPoints(panel); background:SetColorTexture(0.035, 0.045, 0.06, 0.98)
+    Theme.Surface(panel, "canvas")
     label(panel, "MarketPilot settings", 14, -13, 265, "GameFontNormal")
     local title = CreateFrame("Frame", nil, panel)
     self.titleHandle = title
@@ -97,7 +96,7 @@ function Settings:Create()
     end) end)
     title:SetScript("OnDragStop", function() self:Guard(self.StopDrag) end)
     panel:SetScript("OnHide", function() self:Guard(self.StopDrag) end)
-    local close = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    local close = Theme.Button(panel, "x", 26, 24, function() panel:Hide() end)
     self.closeButton = close
     close:SetSize(26, 24); close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -8); close:SetText("x")
     close:SetScript("OnClick", function() panel:Hide() end)

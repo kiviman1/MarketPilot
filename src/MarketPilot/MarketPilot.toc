@@ -20,6 +20,7 @@ Market.lua
 Preferences.lua
 MarketInsight.lua
 UIViewModel.lua
+UITheme.lua
 UI.lua
 Settings.lua
 Minimap.lua

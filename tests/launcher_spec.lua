@@ -7,6 +7,7 @@ local function fixture(configure)
         f.objects[#f.objects + 1] = w
         function w:SetSize(width, height) self.width, self.height = width, height end
         function w:SetWidth(value) self.width = value end
+        function w:SetHeight(value) self.height = value end
         function w:GetWidth() return self.width end
         function w:GetHeight() return self.height end
         function w:GetCenter() return self.cx, self.cy end
@@ -20,7 +21,10 @@ local function fixture(configure)
         function w:SetColorTexture(...) self.color = { ... } end
         function w:SetTexture(value) self.texture = value end
         function w:SetHighlightTexture(...) self.highlight = { ... } end
-        function w:SetText(value) self.text = value end
+        function w:SetText(value) self.text = value; if self.caption then self.caption.text = value end end
+        function w:SetFontString(value) self.caption = value end
+        function w:IsEnabled() return self.enabled end
+        function w:SetTextColor(...) self.textColor = { ... } end
         function w:SetJustifyH(value) self.justify = value end
         function w:SetWordWrap(value) self.wrap = value end
         function w:SetMovable(value) self.movable = value end
@@ -76,7 +80,7 @@ local function fixture(configure)
     function env.GameTooltip:Hide() self.shown = false end
     if configure then configure(f) end
     f.mp = {}
-    for _, file in ipairs({ "Preferences.lua", "Settings.lua", "Minimap.lua" }) do
+    for _, file in ipairs({ "Preferences.lua", "UITheme.lua", "Settings.lua", "Minimap.lua" }) do
         setfenv(assert(loadfile("src/MarketPilot/" .. file)), env)("MarketPilot", f.mp)
     end
     f.root = { schema = 1, markets = { untouched = { items = {} } }, _svCanary = 20 }
@@ -214,7 +218,7 @@ test("lifecycle refresh never reanchors a natively moving settings window or min
     assert(not f.window.frame.moving and not f.launcher.button.moving)
 end)
 test("settings and launcher contain no AH, scan, polling, or framework dependencies", function()
-    for _, name in ipairs({ "Preferences.lua", "Settings.lua", "Minimap.lua" }) do
+    for _, name in ipairs({ "Preferences.lua", "UITheme.lua", "Settings.lua", "Minimap.lua" }) do
         local file = assert(io.open("src/MarketPilot/" .. name, "rb")); local source = file:read("*a"); file:close()
         for _, forbidden in ipairs({ "C_AuctionHouse", "Scanner", "OnUpdate", "C_Timer", "Ace", "LibDBIcon", "HookScript" }) do
             assert(not source:find(forbidden, 1, true), name .. " " .. forbidden)
