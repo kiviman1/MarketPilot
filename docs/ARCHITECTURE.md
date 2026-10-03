@@ -30,6 +30,16 @@ There is no Inventory, Pricing, Sale Assistant or posting module. Probe is uncha
 | UI | Native side panel; consumes Market/Scanner, never recalculates statistics |
 | Settings | Independent UIParent window for display, category, lock, trace and launcher preferences |
 | Minimap | Native click/drag launcher; injected watch/settings callbacks |
+| ExternalData | Empty source stub replaced by a validated desktop import at the installed destination |
+| ExternalMarket | Pure validation and detached read access to provider records; no DB or Scanner dependency |
+| ExternalView | Provider-only presentation using existing money/age formatting; no local statistical reinterpretation |
+
+The optional private Windows companion is independent of the AH scanner.
+It imports AHledger prices and hourly/daily history into a separate literal Lua
+file, loaded at login/reload. The AHledger tab is read-only even with AH open.
+Local Watch and Report retain their original data and behavior. No external
+record is appended to Database, no SavedVariables schema changes, and no local
+realm-to-provider market mapping is assumed. See [import contract](AHLEDGER_SYNC.md).
 
 ```text
 Core -> Scanner -> AuctionAPI

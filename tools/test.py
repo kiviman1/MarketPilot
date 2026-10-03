@@ -55,6 +55,9 @@ def main():
     result = subprocess.run([sys.executable, str(ROOT / "tools/test_package.py")])
     if result.returncode:
         return result.returncode
+    result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "sync", "-p", "test_*.py"])
+    if result.returncode:
+        return result.returncode
     print(f"\nPASS: all {len(SUITES)} Lua 5.1 suites")
     return 0
 

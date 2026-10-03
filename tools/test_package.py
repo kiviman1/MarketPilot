@@ -60,6 +60,17 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(marker.read_bytes(), b"preserve")
             self.assertEqual(list(dev.iterdir()), [marker])
 
+    def test_dev_redeploy_preserves_synced_data_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            dev = Path(temp) / "MarketPilotDev"
+            write_development(dev)
+            data = dev / "ExternalData.lua"
+            data.write_bytes(b"local _, MP = ...; MP.ExternalPayload = {schema=1}")
+            (dev / "UI.lua").write_bytes(b"old code")
+            write_development(dev)
+            self.assertEqual(data.read_bytes(), b"local _, MP = ...; MP.ExternalPayload = {schema=1}")
+            self.assertEqual((dev / "UI.lua").read_bytes(), development_manifest()["UI.lua"])
+
 
 if __name__ == "__main__":
     unittest.main()

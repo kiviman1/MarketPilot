@@ -113,6 +113,10 @@ market = MP.Market.New(MP.Database.Open(nil), MP.Items)
 MP.batch, MP.market = batch, market
 panel = MP.UI.New(scanner, MP.Items, debug, market, batch, time)
 MP.panel = panel
+-- Imported provider data stays session-only, separate from local scan history.
+MP.external = MP.ExternalMarket.New(MP.ExternalPayload, MP.Items.List())
+panel.external = MP.external
+MP.ExternalPayload = nil
 local preferences = MP.Preferences.New(nil)
 local settings, minimap
 panel.preferences = preferences
@@ -264,8 +268,8 @@ SLASH_MARKETPILOT1 = "/mp"
 SlashCmdList.MARKETPILOT = function(input)
     local ok, err = pcall(function()
         local command = (input or ""):match("^%s*(.-)%s*$"):lower()
-        if panel.mode == "STANDALONE" and (command == "scan" or command == "batch" or command == "cancel") then
-            debug("read-only watch; open AH to scan"); return
+        if (panel.mode == "STANDALONE" or panel.externalMode) and (command == "scan" or command == "batch" or command == "cancel") then
+            debug("read-only view; select Market Watch with AH open to scan"); return
         end
         if command == "scan" then
             if startupError then debug(startupError); return end
@@ -275,6 +279,11 @@ SlashCmdList.MARKETPILOT = function(input)
         elseif command == "cancel" then batch:Cancel(); panel:Guard(panel.Update)
         elseif command == "report" then panel:Guard(panel.ToggleReport)
         elseif command == "watch" then panel:Guard(panel.ToggleWatch)
+        elseif command == "external" then panel:Guard(panel.ToggleExternal)
+        elseif command == "syncstatus" then
+            debug("AHledger status=" .. MP.external.status .. " market=" .. (MP.external.market or "not selected")
+                .. " fetchedAt=" .. tostring(MP.external.fetchedAt or "not updated")
+                .. (MP.external.reason and " reason=" .. MP.external.reason or ""))
         elseif command == "settings" then settings:Toggle()
         elseif command == "dbstatus" then databaseStatus()
         elseif command == "svdebug" then savedVariablesDebug()
@@ -285,7 +294,7 @@ SlashCmdList.MARKETPILOT = function(input)
             settings:Refresh()
             debug("scan trace " .. (debugEnabled and "ON" or "OFF"))
         elseif command == "status" or command == "" then debug(scanner:Summary())
-        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp settings | /mp debug on/off") end
+        else debug("commands: /mp scan | /mp status | /mp dbstatus | /mp svdebug | /mp svmark | /mp batch | /mp cancel | /mp report | /mp watch | /mp external | /mp syncstatus | /mp settings | /mp debug on/off") end
     end)
     if not ok then scanner:Fail("UNKNOWN: command failed: " .. tostring(err)) end
 end

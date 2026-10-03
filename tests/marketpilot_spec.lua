@@ -82,7 +82,7 @@ local function test(name, run)
 end
 
 test("TOC order and static production boundaries", function()
-    assert(table.concat(files, ",") == "Items.lua,AuctionAPI.lua,Statistics.lua,HistoryMath.lua,Database.lua,Significance.lua,HistoricalAnalytics.lua,MarketSignal.lua,Scanner.lua,BatchScanner.lua,Market.lua,Preferences.lua,MarketInsight.lua,UIViewModel.lua,UITheme.lua,UI.lua,Settings.lua,Minimap.lua,Core.lua")
+    assert(table.concat(files, ",") == "Items.lua,AuctionAPI.lua,Statistics.lua,HistoryMath.lua,ExternalData.lua,ExternalMarket.lua,Database.lua,Significance.lua,HistoricalAnalytics.lua,MarketSignal.lua,Scanner.lua,BatchScanner.lua,Market.lua,Preferences.lua,MarketInsight.lua,UIViewModel.lua,ExternalView.lua,UITheme.lua,UI.lua,Settings.lua,Minimap.lua,Core.lua")
     assert(toc:find("## SavedVariables: MarketPilotDB", 1, true))
     for _, name in ipairs(files) do
         local source = read(ROOT .. name)

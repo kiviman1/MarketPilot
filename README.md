@@ -52,6 +52,13 @@ The viewport fits the available screen height; the mouse wheel reaches all conte
 
 ## Development testing
 
+Private AHledger integration is available through the separate **MarketPilot
+Sync** desktop companion and the addon's read-only **AHledger** tab. Select a
+market explicitly, update, then `/reload` → `/mpdev external` in the dev addon.
+Provider prices/history remain separate from local scans and SavedVariables.
+See [setup, data contract and checks](docs/AHLEDGER_SYNC.md). Public release
+packaging is not part of this development task.
+
 Keep the CurseForge-managed `MarketPilot/` installation intact. Generate a
 development copy from this same source with:
 

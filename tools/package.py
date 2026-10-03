@@ -60,6 +60,10 @@ def write_development(destination):
     for name, content in files.items():
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
+        # A companion-owned data import is not addon source. Do not replace a
+        # successful download with the source tree's empty placeholder.
+        if name == "ExternalData.lua" and target.exists():
+            continue
         target.write_bytes(content)
     print(f"Development copy: {destination}; /mpdev; isolated MarketPilotDevDB; no release ZIP")
 

@@ -10,6 +10,8 @@ Items.lua
 AuctionAPI.lua
 Statistics.lua
 HistoryMath.lua
+ExternalData.lua
+ExternalMarket.lua
 Database.lua
 Significance.lua
 HistoricalAnalytics.lua
@@ -20,6 +22,7 @@ Market.lua
 Preferences.lua
 MarketInsight.lua
 UIViewModel.lua
+ExternalView.lua
 UITheme.lua
 UI.lua
 Settings.lua

@@ -175,7 +175,10 @@ local function fixture(configure)
     }
     if configure then configure(f) end
     f.mp = {}
-    for _, path in ipairs(files) do setfenv(assert(loadfile(ROOT .. path)), env)("MarketPilot", f.mp) end
+    for _, path in ipairs(files) do
+        setfenv(assert(loadfile(ROOT .. path)), env)("MarketPilot", f.mp)
+        if path == "ExternalData.lua" and f.externalPayload ~= nil then f.mp.ExternalPayload = f.externalPayload end
+    end
     f.panel, f.scanner, f.view = f.mp.panel, f.mp.scanner, f.mp.UIViewModel
     function f:event(event, ...)
         -- Copy recipients: newly created panel widgets are not event recipients.
@@ -204,7 +207,7 @@ local passed = 0
 local function test(name, run) run(); passed = passed + 1; print("PASS " .. name) end
 
 test("UI static boundaries and presentation-only money conversion", function()
-    for _, path in ipairs({ "UI.lua", "UIViewModel.lua" }) do
+    for _, path in ipairs({ "UI.lua", "UIViewModel.lua", "ExternalView.lua" }) do
         local source = read(ROOT .. path)
         for _, forbidden in ipairs({ "C_AuctionHouse", "Statistics.Analyze", "math.log", "OnUpdate", "HookScript", "hooksecurefunc",
             "SavedVariables", "PostItem", "PostCommodity", "auctionID", "C_Container", "SetAuction" }) do
@@ -2141,6 +2144,172 @@ test("small screen bounds viewport while preserving scroll reach and docking", f
     assert(f.panel.mode == "AH" and not f.panel.frame.movable and #f.sent == 0)
     f.panel.toggle:Click(); assert(f.panel.frame.height == 52)
     f.panel.toggle:Click(); assert(f.panel.scroll:IsVisible())
+end)
+
+local function externalPayload(now)
+    local hourly = {}
+    for index = 1, 16 do
+        hourly[index] = { t = now - (17 - index) * 3600, min = 100 + index,
+            median = 200 + index, quantity = 500 + index, auctions = 10 + index }
+    end
+    return { schema = 1, source = "AHledger", url = "https://ahledger.com",
+        market = "forever.normal.horde.us", marketLabel = "Normal Horde", region = "us", fetchedAt = now - 60,
+        itemIDs = { 2770, 2447 }, items = {
+            [2770] = { latest = { t = now - 120, median = 199.5, lowest = 100, quantity = 900,
+                auctions = 47, median7d = 100, median30d = 399 }, hourly = hourly,
+                daily = { { t = now - 28 * DAY, median = 240 }, { t = now - 3 * DAY, median = 250 },
+                    { t = now - DAY, median = 260, p25 = 250.5, p75 = 300.5, quantity = 2000, auctions = 78 } } },
+            [2447] = { latest = { t = now - 300, median = 80.5 } },
+        } }
+end
+local function externalFixture(configure)
+    return watchFixture(function(f)
+        f.externalPayload = externalPayload(f.now)
+        if configure then configure(f) end
+    end)
+end
+
+test("AHledger tab opens the injected provider market and keeps local statistics separate", function()
+    local f = externalFixture(); local saved = clone(f.env.MarketPilotDB)
+    f.env.SlashCmdList.MARKETPILOT("external")
+    assert(f.panel.external == f.mp.external and f.mp.external.status == "OK")
+    assert(f.panel.externalMode and f.panel:IsReadOnly() and f.panel.externalDetails:IsVisible())
+    assert(f.panel.externalButton.active and not f.panel.watchButton.active and not f.panel.reportButton.active)
+    assert(f.panel.externalButton.point[4] == 322 and f.panel.externalButton.point[5] == -105 and f.panel.externalButton.width == 145)
+    assert(not f.panel.detail:IsVisible() and not f.panel.reportText:IsVisible() and not f.panel.scan:IsVisible())
+    assert(f.panel.externalValues.median.text == coins(nil, 1, 99.5))
+    assert(f.panel.externalValues.lowest.text == coins(nil, 1, 0) and f.panel.externalValues.auctions.text == "47")
+    assert(f.panel.externalValues.quantity.text == "900")
+    assert(f.panel.externalValues.median7d.text == coins(nil, 1, 0) and f.panel.externalValues.median30d.text == coins(nil, 3, 99))
+    assert(f.panel.externalValues.change7d.text == "+99.5%" and f.panel.externalValues.change30d.text == "-50.0%")
+    assert(f.panel.externalValues.hourlyCount.text == "16" and f.panel.externalValues.dailyCount.text == "3")
+    assert(f.panel.rows[2770].columns.now.text == coins(nil, 1, 99.5) and f.panel.rows[2770].columns.change.text == "+99.5%")
+    for _, key in ipairs({ "trend", "percentile", "supply" }) do assert(f.panel.rows[2770].columns[key].text == "-") end
+    assert(f.panel.rows[2770].columns.maturity.text == "External")
+    local description = f.panel.externalDescription.text
+    for _, expected in ipairs({ "Selected market: Normal Horde", "Region: us", "Market ID: forever.normal.horde.us",
+        "Source: AHledger", "https://ahledger.com", "Latest observation: 3999880 | 2 minutes ago",
+        "Fetched: 3999940 | 1 minute ago", "Daily series actual span: 27.0 days" }) do
+        assert(description:find(expected, 1, true), expected)
+    end
+    assert(not description:find("Fixture Realm", 1, true) and not description:find("Alliance", 1, true))
+    assert(f.panel.externalBand.text:find("Latest daily bucket P25-P75: " .. coins(nil, 2, 50.5) .. " - " .. coins(nil, 3, 0.5), 1, true))
+    assert(f.panel.externalView.cleanMedian == nil and f.panel.externalView.levels == nil)
+    same(f.env.MarketPilotDB, saved); assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("AHledger is read only inside AH and forced actions never enter scanner database or AH APIs", function()
+    local f = externalFixture(); f.makeAnchor(); f:open(); local saved = clone(f.env.MarketPilotDB)
+    f.panel:ToggleExternal()
+    local calls = 0
+    local function forbidden() calls = calls + 1; error("external view entered local scan/store path") end
+    f.scanner.Start, f.mp.batch.Start, f.mp.batch.Cancel = forbidden, forbidden, forbidden
+    f.scanner.IsActive = forbidden
+    f.mp.market.Get, f.mp.market.Report, f.mp.market.db.Append, f.mp.market.db.Prune = forbidden, forbidden, forbidden, forbidden
+    f.mp.Statistics.Analyze, f.mp.HistoricalAnalytics.Analyze = forbidden, forbidden
+    for name in pairs(f.env.C_AuctionHouse) do f.env.C_AuctionHouse[name] = forbidden end
+    assert(f.panel.mode == "AH" and f.panel:IsReadOnly())
+    assert(not f.panel.batchButton.enabled and not f.panel.cancelButton.enabled and not f.panel.scan.enabled)
+    for _, widget in ipairs({ f.panel.batchButton, f.panel.cancelButton, f.panel.scan }) do widget:Click(true) end
+    for _, command in ipairs({ "scan", "batch", "cancel" }) do f.env.SlashCmdList.MARKETPILOT(command) end
+    assert(f.panel:Scan() == false and f.panel:StartBatch() == false and f.panel:CancelBatch() == false)
+    f:select(2447)
+    f.panel:SetCategory("Herbalism"); f.panel:Page(1); f.panel:Page(-1)
+    f.panel.externalHourlyButton:Click(); f.panel.externalDailyButton:Click(); f.panel.externalSummaryButton:Click()
+    f.panel:Update(); f.panel:ToggleExternal()
+    assert(f.panel.selectedItemID == 2447 and f.scanner.itemID == 2770 and f.scanner.state == "IDLE")
+    assert(f.panel.externalValues.median.text == coins(nil, nil, 80.5) and calls == 0 and #f.sent == 0)
+    same(f.env.MarketPilotDB, saved)
+end)
+
+test("missing external optional values and unexported items preserve unknown without zero prices", function()
+    local f = externalFixture(); f.panel:ToggleExternal(); f:select(2447)
+    for _, key in ipairs({ "lowest", "quantity", "auctions", "median7d", "median30d", "change7d", "change30d" }) do
+        assert(f.panel.externalValues[key].text == "Not available", key)
+    end
+    assert(f.panel.externalValues.hourlyCount.text == "0" and f.panel.externalValues.dailyCount.text == "0")
+    assert(f.panel.rows[2447].columns.change.text == "-" and not f.panel.externalBand:IsShown())
+    f:select(2318)
+    assert(f.panel.rows[2318].columns.now.text == "No data" and f.panel.rows[2318].columns.maturity.text == "No data")
+    for _, field in pairs(f.panel.externalValues) do assert(field.text == "Not available") end
+    assert(f.panel.externalDescription.text:find("No exported data for this item", 1, true))
+    assert(f.panel.externalDescription.text:find("Age unavailable", 1, true))
+    assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("invalid external payload and empty bundle keep catalogue available and provider values unavailable", function()
+    for _, payload in ipairs({ {}, { schema = 999 } }) do
+        local f = externalFixture(function(g) g.externalPayload = payload end)
+        local saved = clone(f.env.MarketPilotDB); f.panel:ToggleExternal()
+        assert(f.panel.externalDetails:IsVisible() and f.panel.catalogue:IsVisible())
+        assert(f.panel.externalDescription.text:find("AHledger data unavailable:", 1, true))
+        for _, field in pairs(f.panel.externalValues) do assert(field.text == "Not available") end
+        assert(not f.panel.externalBand:IsShown() and f.panel.rows[2770].columns.now.text == "No data")
+        f:select(2447); same(f.env.MarketPilotDB, saved); assert(f.ahCalls == 0 and #f.sent == 0)
+    end
+    local f = externalFixture(function(g)
+        g.externalPayload.items, g.externalPayload.itemIDs = {}, {}
+    end)
+    f.panel:ToggleExternal()
+    assert(f.panel.externalValues.median.text == "Not available" and f.panel.rows[2770].columns.maturity.text == "No data")
+end)
+
+test("external history uses actual bounded series without borrowing a current price", function()
+    local f = externalFixture(function(g) g.externalPayload.items[2770].latest = nil end)
+    f.panel:ToggleExternal()
+    assert(f.panel.externalValues.median.text == "Not available" and f.panel.externalValues.change7d.text == "Not available")
+    assert(f.panel.rows[2770].columns.now.text == "No data" and f.panel.rows[2770].columns.maturity.text == "External")
+    assert(f.panel.externalView.span30d == "27.0 days" and f.panel.externalBand:IsShown())
+    f.panel.externalHourlyButton:Click()
+    local _, records = f.panel.externalHistory.text:gsub("| median ", "")
+    assert(records == 12 and f.panel.externalHistory.text:find("Hourly provider buckets", 1, true))
+    assert(not f.panel.externalHistory.text:find("3942400 | median", 1, true)) -- Oldest omitted hourly bucket.
+    f.panel.externalDailyButton:Click()
+    local _, daily = f.panel.externalHistory.text:gsub("| median ", "")
+    assert(daily == 3 and f.panel.externalHistory.text:find("Daily provider buckets", 1, true))
+    assert(f.panel.externalHistory.text:find("quantity Not available | auctions Not available", 1, true))
+    f.panel.externalSummaryButton:Click(); assert(not f.panel.externalHistory:IsShown())
+    assert(f.ahCalls == 0 and #f.sent == 0)
+end)
+
+test("local Watch and Report retain their own values and scans after visiting AHledger", function()
+    local f = externalFixture(); f:watch(); local localView = clone(f.panel.view)
+    local saved = clone(f.env.MarketPilotDB)
+    f.panel:ToggleExternal(); f.panel.reportButton:Click()
+    assert(not f.panel.externalMode and f.panel.reportMode and f.panel.reportText:IsVisible())
+    assert(f.panel.reportText.text:find("Client item 2770: 30d percentile 0", 1, true))
+    f.panel:ToggleExternal(); f.panel.watchButton:Click()
+    assert(not f.panel.externalMode and not f.panel.reportMode and f.panel.detail:IsVisible())
+    same(f.panel.view, localView); same(f.env.MarketPilotDB, saved)
+    assert(f.panel.rows[2770].columns.now.text == coins(nil, 1, 0))
+    f.makeAnchor(); f:open(); f.panel:ToggleExternal(); f.panel.watchButton:Click()
+    assert(f.panel.scan:IsVisible() and f.panel.scan.enabled and not f.panel:IsReadOnly())
+    f.panel.scan:Click(); f:complete()
+    assert(#f.sent == 1 and f.panel.view.cleanMedian == coins(nil, 2, 0))
+end)
+
+test("external view stays visible across AH close without scans and wraps into scroll bounds", function()
+    local f = externalFixture(); f.env.UIParent:SetHeight(560)
+    f.panel:ToggleExternal(); f.makeAnchor(); f:open(); local saved = clone(f.env.MarketPilotDB)
+    assert(f.panel.mode == "AH" and f.panel.externalMode and f.panel:IsReadOnly())
+    f:event("AUCTION_HOUSE_CLOSED")
+    assert(f.panel.mode == "STANDALONE" and f.panel.externalDetails:IsVisible() and f.panel.externalMode)
+    assert(f.panel.frame.height == 540)
+    f.panel.externalDescription.GetStringHeight = function() return 190 end
+    f.panel.externalValues.median.GetStringHeight = function() return 160 end
+    for _, scale in ipairs({ 0.8, 0.9, 1, 1.1, 1.2 }) do
+        f.mp.preferences:Set("watchScale", scale); f.panel:ApplyPreferences(); f.panel.externalHourlyButton:Click()
+        assert(-f.panel.externalMetrics.point[5] >= 74 + 190 + 14)
+        assert(f.panel.externalTiles[1].height >= 205)
+        assert(-f.panel.externalTiles[5].point[5] >= f.panel.externalTiles[1].height)
+        local historyBottom = -f.panel.externalDetails.point[5] - f.panel.externalHistory.point[5] + f.panel.externalHistory.height
+        assert(f.panel.body.height >= historyBottom)
+        f.panel.scroll.scripts.OnMouseWheel(nil, -100)
+        assert(f.panel.scroll:GetVerticalScroll() + f.panel.scroll.height >= historyBottom)
+        assert(f.panel.frame:GetScale() == scale)
+    end
+    -- Preference writes are permitted settings changes; stored market history is unchanged.
+    same(f.env.MarketPilotDB.markets, saved.markets); assert(f.ahCalls == 0 and #f.sent == 0)
 end)
 
 if DEV_SOURCE_ROOT then

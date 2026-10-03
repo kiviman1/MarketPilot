@@ -19,6 +19,13 @@ local HISTORY_FIELDS = {
     { "Return volatility", "volatility" }, { "Supply / 7d", "supply" }, { "Significance", "significance" },
     { "Last scan", "lastScan" }, { "Observations", "observations" },
 }
+local EXTERNAL_FIELDS = {
+    { "Provider median", "median" }, { "Provider lowest", "lowest" },
+    { "Listed quantity", "quantity" }, { "Auction count", "auctions" },
+    { "7d reference", "median7d" }, { "30d reference", "median30d" },
+    { "7d change", "change7d" }, { "30d change", "change30d" },
+    { "Hourly buckets", "hourlyCount" }, { "Daily buckets", "dailyCount" },
+}
 local COLUMNS = { { "NOW", "now", 190, 120 }, { "7D", "change", 314, 46 },
     { "TREND", "trend", 364, 40 }, { "30D %", "percentile", 408, 46 },
     { "SUPPLY", "supply", 458, 66 }, { "MATURITY", "maturity", 530, 100 } }
@@ -57,7 +64,7 @@ function UI:ApplyWindowLayer()
 end
 
 function UI:IsReadOnly()
-    return self.mode == "STANDALONE" or not self.scanner.ahOpen
+    return self.externalMode == true or self.mode == "STANDALONE" or not self.scanner.ahOpen
 end
 
 function UI:StartDrag()
@@ -160,6 +167,7 @@ function UI:CancelBatch()
     self.batch:Cancel(); self:Update()
 end
 function UI:ToggleReport()
+    self.externalMode = false
     if not self.frame or not self.frame:IsShown() then
         self.watchRequested = true
         if not self:Open() then return false end
@@ -167,6 +175,19 @@ function UI:ToggleReport()
     else self.reportMode = not self.reportMode end
     self.collapsed = false
     if self.scroll then self.scroll:SetVerticalScroll(0) end
+    self:Update()
+end
+function UI:ToggleExternal()
+    self.externalMode, self.reportMode, self.watchRequested, self.collapsed = true, false, true, false
+    if not self.frame or not self.frame:IsShown() then
+        if not self:Open() then return false end
+    end
+    self.scroll:SetVerticalScroll(0)
+    self:Update()
+    return true
+end
+function UI:ExternalDetail(mode)
+    self.externalDetailMode = mode
     self:Update()
 end
 function UI:SetCategory(category)
@@ -241,9 +262,10 @@ function UI:Create(anchor)
     self.historyStatus = label(self.body, "", 16, -77, WIDTH - 32)
     Theme.Color(self.historyStatus, "muted")
     self.watchButton = button("Market Watch", self.body, 16, -105, 145, function(s)
-        s.reportMode = false; s.scroll:SetVerticalScroll(0); s:Update()
+        s.reportMode, s.externalMode = false, false; s.scroll:SetVerticalScroll(0); s:Update()
     end, 34)
     self.reportButton = button("Market Report", self.body, 169, -105, 145, self.ToggleReport, 34)
+    self.externalButton = button("AHledger", self.body, 322, -105, 145, self.ToggleExternal, 34)
     self.catalogue = CreateFrame("Frame", nil, self.body)
     self.catalogue:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -154)
     self.catalogue:SetSize(WIDTH, 326)
@@ -335,6 +357,31 @@ function UI:Create(anchor)
     end
     tiles(self.currentDetails, FIELDS, self.values, self.metricTiles)
     tiles(self.historicalDetails, HISTORY_FIELDS, self.historyValues, self.historyTiles)
+    -- External data has its own card and provider terminology. It never fills
+    -- the local clean-price, price-level, anomaly, or maturity fields.
+    self.externalDetails = CreateFrame("Frame", nil, self.body)
+    self.externalDetails:SetPoint("TOPLEFT", self.body, "TOPLEFT", 0, -DETAIL_TOP)
+    self.externalDetails:SetSize(WIDTH, 500); self.externalDetails:Hide()
+    Theme.Surface(self.externalDetails)
+    self.externalIcon = self.externalDetails:CreateTexture(nil, "ARTWORK")
+    self.externalIcon:SetPoint("TOPLEFT", self.externalDetails, "TOPLEFT", 28, -16); self.externalIcon:SetSize(28, 28)
+    self.externalName = label(self.externalDetails, "", 68, -18, 230, "GameFontNormal")
+    Theme.Color(self.externalName, "gold")
+    self.externalMaturity = label(self.externalDetails, "", 68, -43, 230)
+    Theme.Color(self.externalMaturity, "muted")
+    self.externalSummaryButton = button("Summary", self.externalDetails, 362, -16, 80, function(s) s:ExternalDetail("SUMMARY") end)
+    self.externalHourlyButton = button("Hourly", self.externalDetails, 450, -16, 80, function(s) s:ExternalDetail("HOURLY") end)
+    self.externalDailyButton = button("Daily", self.externalDetails, 538, -16, 80, function(s) s:ExternalDetail("DAILY") end)
+    self.externalDescription = label(self.externalDetails, "", 14, -74, WIDTH - 28)
+    self.externalDescription:SetWordWrap(true); self.externalDescription:SetJustifyV("TOP")
+    self.externalMetrics = CreateFrame("Frame", nil, self.externalDetails)
+    self.externalMetrics:SetSize(WIDTH, 300)
+    self.externalValues, self.externalTiles = {}, {}
+    tiles(self.externalMetrics, EXTERNAL_FIELDS, self.externalValues, self.externalTiles)
+    self.externalBand = label(self.externalDetails, "", 14, -390, WIDTH - 28)
+    self.externalBand:SetWordWrap(true); self.externalBand:SetJustifyV("TOP")
+    self.externalHistory = label(self.externalDetails, "", 14, -430, WIDTH - 28)
+    self.externalHistory:SetWordWrap(true); self.externalHistory:SetJustifyV("TOP")
     self.exclusion = label(self.currentDetails, "", 14, -246, WIDTH - 28)
     self.exclusion:SetHeight(32); self.exclusion:SetWordWrap(true)
     self.message = label(self.currentDetails, "", 14, -286, WIDTH - 28)
@@ -374,7 +421,7 @@ function UI:Create(anchor)
     self.footer = CreateFrame("Frame", nil, panel)
     self.footer:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0); self.footer:SetSize(WIDTH, 30)
     Theme.Surface(self.footer)
-    label(self.footer, "|cff52d1a1^ rising|r    |cffff6b76v falling|r    = stable    - needs history", 16, -9, WIDTH - 32)
+    self.footerText = label(self.footer, "", 16, -9, WIDTH - 32)
 end
 
 function UI:LayoutMetrics()
@@ -510,9 +557,67 @@ function UI:Close()
     if self.frame then self.frame:Hide() end
 end
 
+function UI:UpdateExternal(now)
+    local data = self.external and self.external:Get(self.selectedItemID)
+        or { status = "UNKNOWN", reason = "No synced data available" }
+    local view = MP.ExternalView.Build(data, self.items.Metadata(self.selectedItemID), now)
+    self.externalView = view
+    self.externalName:SetText(view.name); self.externalIcon:SetTexture(view.icon)
+    self.externalMaturity:SetText(view.maturity)
+    self.externalDescription:SetText(view.description)
+    local descriptionHeight = math.ceil(self.externalDescription:GetStringHeight())
+    self.externalDescription:SetHeight(descriptionHeight)
+    local top = 74 + descriptionHeight + 14
+    self.externalMetrics:ClearAllPoints()
+    self.externalMetrics:SetPoint("TOPLEFT", self.externalDetails, "TOPLEFT", 0, -top)
+    for key, widget in pairs(self.externalValues) do widget:SetText(view[key]) end
+    local offset = 0
+    for first = 1, #EXTERNAL_FIELDS, 4 do
+        local height = 78
+        for i = first, math.min(first + 3, #EXTERNAL_FIELDS) do
+            height = math.max(height, 45 + math.ceil(self.externalValues[EXTERNAL_FIELDS[i][2]]:GetStringHeight()))
+        end
+        for i = first, math.min(first + 3, #EXTERNAL_FIELDS) do
+            local tile = self.externalTiles[i]
+            tile:ClearAllPoints()
+            tile:SetPoint("TOPLEFT", self.externalMetrics, "TOPLEFT", 14 + ((i - 1) % 4) * (WIDTH - 28) / 4, -offset)
+            tile:SetHeight(height)
+        end
+        offset = offset + height
+    end
+    self.externalMetrics:SetHeight(offset)
+    top = top + offset + 14
+    self.externalBand:ClearAllPoints(); self.externalBand:SetPoint("TOPLEFT", self.externalDetails, "TOPLEFT", 14, -top)
+    self.externalBand:SetText(view.band or ""); self.externalBand:SetShown(view.band ~= nil)
+    if view.band then
+        local height = math.ceil(self.externalBand:GetStringHeight())
+        self.externalBand:SetHeight(height); top = top + height + 14
+    end
+    local mode = self.externalDetailMode or "SUMMARY"
+    self.externalHistory:SetShown(mode ~= "SUMMARY")
+    self.externalHistory:ClearAllPoints(); self.externalHistory:SetPoint("TOPLEFT", self.externalDetails, "TOPLEFT", 14, -top)
+    if mode ~= "SUMMARY" then
+        self.externalHistory:SetText(MP.ExternalView.History(data, mode))
+        local height = math.ceil(self.externalHistory:GetStringHeight())
+        self.externalHistory:SetHeight(height); top = top + height + 14
+    end
+    for _, pair in ipairs({ { self.externalSummaryButton, "SUMMARY" }, { self.externalHourlyButton, "HOURLY" }, { self.externalDailyButton, "DAILY" } }) do
+        if mode == pair[2] then pair[1]:Disable() else pair[1]:Enable() end
+        Theme.Paint(pair[1], mode == pair[2])
+    end
+    self.externalDetails:SetHeight(top + 14)
+    self.externalContentHeight = DETAIL_TOP + top + 28
+    self.detail:Hide(); self.reportText:Hide(); self.externalDetails:Show(); self.catalogue:Show()
+    self.scan:Hide(); self.scan:Disable(); self.batchButton:Disable(); self.cancelButton:Disable()
+    self.progress:SetText("READ ONLY | AHledger bundled data")
+    self.historyStatus:SetText("External market data | Provider observations")
+end
+
 function UI:Update()
     local readOnly = self.mode == "STANDALONE"
-    self.view = MP.UIViewModel.Build(self.scanner, self.selectedItemID, self.items.Metadata(self.selectedItemID), readOnly)
+    local metadata = self.items.Metadata(self.selectedItemID)
+    self.view = self.externalMode and { itemID = self.selectedItemID, name = metadata.name, icon = metadata.icon, itemsEnabled = true }
+        or MP.UIViewModel.Build(self.scanner, self.selectedItemID, metadata, readOnly)
     if not self.frame or not self.anchor then return end
     if not self.scanner.ahOpen and not readOnly then self:Close(); return end
     local view = self.view
@@ -520,8 +625,12 @@ function UI:Update()
     self.toggle:SetText(self.collapsed and "+" or "-")
     if self.collapsed then self.body:Hide(); self.scroll:Hide(); self.footer:Hide()
     else self.body:Show(); self.scroll:Show(); self.footer:Show() end
-    local data = self.market:Get(self.selectedItemID)
     local now = self.clock()
+    if self.externalMode then
+        self:UpdateExternal(now)
+    else
+    self.externalDetails:Hide()
+    local data = self.market:Get(self.selectedItemID)
     self:UpdateInsight(data, now)
     -- A completed historical observation remains visible after reopening AH.
     if data.current and (readOnly or self.scanner.state == "IDLE" or self.scanner.itemID ~= self.selectedItemID) then
@@ -539,8 +648,6 @@ function UI:Update()
     if self.reportMode then self.detail:Hide(); self.catalogue:Hide(); self.reportText:Show()
         self:UpdateReport(self.market:Report())
     else self.reportText:Hide(); self.detail:Show(); self.catalogue:Show() end
-    Theme.Paint(self.reportButton, self.reportMode == true)
-    Theme.Paint(self.watchButton, not self.reportMode)
     if self.detailMode == "HISTORY" then self.historicalDetails:Show(); self.currentDetails:Hide()
     else self.historicalDetails:Hide(); self.currentDetails:Show() end
     if self.detailMode == "HISTORY" then self.historyButton:Disable(); self.currentButton:Enable()
@@ -569,6 +676,12 @@ function UI:Update()
     self:LayoutMetrics()
     self.scan:SetText(view.buttonText)
     if view.scanEnabled and not self.batch.active then self.scan:Enable() else self.scan:Disable() end
+    end
+    Theme.Paint(self.externalButton, self.externalMode == true)
+    Theme.Paint(self.reportButton, not self.externalMode and self.reportMode == true)
+    Theme.Paint(self.watchButton, not self.externalMode and not self.reportMode)
+    self.footerText:SetText(self.externalMode and "AHledger | Unit prices | Bundled external data | Read only"
+        or "|cff52d1a1^ rising|r    |cffff6b76v falling|r    = stable    - needs history")
     local list, visible = self.items.List(self.category), {}
     local pages = math.max(1, math.ceil(#list / PAGE_SIZE))
     self.page = math.max(1, math.min(pages, self.page))
@@ -587,8 +700,15 @@ function UI:Update()
         local info = self.items.Metadata(itemID)
         row.text:SetText(info.name)
         row.icon:SetTexture(info.icon)
-        local watch = MP.UIViewModel.Watch(self.market:Get(itemID))
-        for key, widget in pairs(row.columns) do widget:SetText(watch[key]) end
+        local watch
+        if self.externalMode then
+            -- History arrays can be large. Detached provider records are only
+            -- needed for the visible catalogue page and the selected detail.
+            if visible[itemID] then
+                watch = MP.ExternalView.Watch(self.external and self.external:Get(itemID) or { status = "UNKNOWN" })
+            end
+        else watch = MP.UIViewModel.Watch(self.market:Get(itemID)) end
+        if watch then for key, widget in pairs(row.columns) do widget:SetText(watch[key]) end end
         if itemID == view.itemID then row.selection:Show() else row.selection:Hide() end
         if itemID == view.itemID then row.accent:Show() else row.accent:Hide() end
         if view.itemsEnabled or self.batch.active then row:Enable() else row:Disable() end
@@ -598,7 +718,8 @@ function UI:Update()
             row:Show()
         else row:Hide() end
     end
-    local contentHeight = self.reportMode and self.reportContentHeight or self.watchContentHeight
+    local contentHeight = self.externalMode and self.externalContentHeight
+        or (self.reportMode and self.reportContentHeight or self.watchContentHeight)
     self.body:SetHeight(contentHeight)
     self.scrollLimit = math.max(0, contentHeight - self.scroll:GetHeight())
     self.scroll:SetVerticalScroll(math.min(self.scroll:GetVerticalScroll(), self.scrollLimit))
